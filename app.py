@@ -151,7 +151,7 @@ def build_long_scores(steeps: pd.DataFrame) -> pd.DataFrame:
 
 def plot_steeps_with_average(long_df: pd.DataFrame, title: str = "Steep scores"):
     if long_df.empty:
-        st.info("No per-steep scores yet. Add a session with steep scores below.")
+        st.info("No per-steep scores yet. Add a session with steep scores in the first tab.")
         return
     # Average across visible data
     avg = long_df["steep_score"].mean()
@@ -174,96 +174,12 @@ def plot_steeps_with_average(long_df: pd.DataFrame, title: str = "Steep scores")
     fig.update_yaxes(title_text="Score")
     st.plotly_chart(fig, use_container_width=True)
 
-# -------------------- Filters / Sidebar --------------------
+# -------------------- Tabs: 1) Add Session (default)  2) Add Tea  3) Browse --------------------
 
-with st.sidebar:
-    st.subheader("Filters")
-    tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0)
-    supplier_filter = st.text_input("Supplier contains", value="")
-    date_from = st.date_input("From date", value=None)
-    date_to = st.date_input("To date", value=None)
+tabs = st.tabs(["📝 Add Session", "➕ Add Tea", "🔎 Browse"])
 
-# Join steeps with teas for filtering/context
-if "tea_id" in steeps_df.columns and "tea_id" in teas_df.columns:
-    joined = steeps_df.merge(teas_df[["tea_id","name","type","supplier"]], on="tea_id", how="left")
-else:
-    joined = steeps_df.copy()
-    joined["name"] = None
-    joined["type"] = None
-    joined["supplier"] = None
-
-joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
-
-# Apply filters
-mask = pd.Series([True]*len(joined))
-if tea_type_filter != "(all)":
-    mask &= (joined["type"].str.lower() == tea_type_filter)
-if supplier_filter:
-    mask &= joined["supplier"].fillna("").str.contains(supplier_filter, case=False, na=False)
-if date_from:
-    mask &= (joined["session_at"].dt.date >= date_from)
-if date_to:
-    mask &= (joined["session_at"].dt.date <= date_to)
-
-joined_filt = joined[mask].copy()
-
-# Build long-form per-steep scores for chart
-long_scores = build_long_scores(joined_filt)
-
-st.markdown("### 📈 Steep Scores (markers per steep + average line)")
-plot_steeps_with_average(long_scores, title="Steep Scores (touch-friendly, responsive)")
-
-# -------------------- Add / Edit Forms --------------------
-
-st.markdown("---")
-st.header("Add New Tea or Session")
-
-tabs = st.tabs(["➕ Add Tea", "📝 Add Session"])
-
+# ---------- Tab 1: Add Session (default) ----------
 with tabs[0]:
-    st.caption("Add a tea to your catalogue.")
-    colA, colB = st.columns(2)
-    with colA:
-        tea_name = st.text_input("Tea name", placeholder="e.g., Lao Cong Mi Lan Xiang")
-        tea_type = st.selectbox("Tea type", options=TEA_TYPES, index=0, help="Choose the main style of the tea.")
-        subtype = st.text_input("Subtype (optional)", placeholder="Dan Cong, Rou Gui, etc.")
-        supplier = st.text_input("Supplier (optional)")
-        url = st.text_input("URL (optional)")
-    with colB:
-        cultivar = st.text_input("Cultivar (optional)")
-        region = st.text_input("Region (optional)")
-        pick_year = st.number_input("Pick year (optional)", min_value=1900, max_value=datetime.now().year, step=1)
-        oxidation = st.text_input("Oxidation (notes)")
-        roasting = st.text_input("Roasting (notes)")
-
-    add_tea_btn = st.button("Save Tea", type="primary", use_container_width=True)
-    if add_tea_btn:
-        if not tea_name:
-            st.error("Tea name is required.")
-        else:
-            tea_row = {
-                "name": tea_name,
-                "type": tea_type,
-                "subtype": subtype or None,
-                "supplier": supplier or None,
-                "URL": url or None,
-                "cultivar": cultivar or None,
-                "region": region or None,
-                "pick_year": int(pick_year) if pick_year else None,
-                "oxidation": oxidation or None,
-                "roasting": roasting or None,
-                "created_at": datetime.utcnow().isoformat()
-            }
-            if DEMO_MODE:
-                st.success("Demo mode: tea captured locally (not persisted).")
-            else:
-                try:
-                    SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
-                    st.success("Tea saved to Supabase.")
-                except Exception as e:
-                    st.error(f"Failed to save tea: {e}")
-
-with tabs[1]:
     st.caption("Record a tasting session with per-steep scores.")
     # Select Tea
     tea_choices = ["(select)"] + teas_df.get("name", pd.Series(dtype=str)).fillna("(unnamed)").tolist()
@@ -305,7 +221,7 @@ with tabs[1]:
     save_session_btn = st.button("Save Session", type="primary", use_container_width=True)
     if save_session_btn:
         if tea_id is None:
-            st.error("Please select a tea first (from the 'Add Tea' tab if needed).")
+            st.error("Please select a tea first (use the 'Add Tea' tab if needed).")
         else:
             row = {
                 "tea_id": tea_id,
@@ -321,12 +237,8 @@ with tabs[1]:
             }
             if DEMO_MODE:
                 st.success("Demo mode: session captured locally (not persisted).")
-                # Update in-memory data for the chart
+                # Update in-memory data for the chart in the Browse tab
                 steeps_df.loc[len(steeps_df)] = row
-                joined_new = steeps_df.merge(teas_df[["tea_id","name","type","supplier"]], on="tea_id", how="left")
-                long_new = build_long_scores(joined_new)
-                st.markdown("#### Preview Updated Chart")
-                plot_steeps_with_average(long_new, title="Steep Scores (updated)")
             else:
                 try:
                     SUPABASE.table("steeps").insert(row).execute()  # type: ignore
@@ -334,6 +246,104 @@ with tabs[1]:
                 except Exception as e:
                     st.error(f"Failed to save session: {e}")
 
-# -------------------- Data Preview --------------------
-with st.expander("Data preview (filtered)"):
+# ---------- Tab 2: Add Tea ----------
+with tabs[1]:
+    st.caption("Add a tea to your catalogue.")
+    colA, colB = st.columns(2)
+    with colA:
+        tea_name = st.text_input("Tea name", placeholder="e.g., Lao Cong Mi Lan Xiang")
+        tea_type = st.selectbox("Tea type", options=TEA_TYPES, index=0, help="Choose the main style of the tea.")
+        subtype = st.text_input("Subtype (optional)", placeholder="Dan Cong, Rou Gui, etc.")
+        supplier = st.text_input("Supplier (optional)")
+        url = st.text_input("URL (optional)")
+    with colB:
+        cultivar = st.text_input("Cultivar (optional)")
+        region = st.text_input("Region (optional)")
+        pick_year = st.number_input("Pick year (optional)", min_value=1900, max_value=datetime.now().year, step=1)
+        oxidation = st.text_input("Oxidation (notes)")
+        roasting = st.text_input("Roasting (notes)")
+
+    add_tea_btn = st.button("Save Tea", type="primary", use_container_width=True)
+    if add_tea_btn:
+        if not tea_name:
+            st.error("Tea name is required.")
+        else:
+            tea_row = {
+                "name": tea_name,
+                "type": tea_type,
+                "subtype": subtype or None,
+                "supplier": supplier or None,
+                "URL": url or None,
+                "cultivar": cultivar or None,
+                "region": region or None,
+                "pick_year": int(pick_year) if pick_year else None,
+                "oxidation": oxidation or None,
+                "roasting": roasting or None,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            if DEMO_MODE:
+                st.success("Demo mode: tea captured locally (not persisted).")
+                # Update in-memory list for the Add Session tab
+                teas_df.loc[len(teas_df)] = tea_row
+            else:
+                try:
+                    SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
+                    st.success("Tea saved to Supabase.")
+                except Exception as e:
+                    st.error(f"Failed to save tea: {e}")
+
+# ---------- Tab 3: Browse (charts + table) ----------
+with tabs[2]:
+    st.caption("Explore your sessions and teas. Use filters to narrow down, then see per-steep markers and the average line.")
+    # Filters
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
+        tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0)
+    with col2:
+        supplier_filter = st.text_input("Supplier contains", value="")
+    with col3:
+        date_from = st.date_input("From date", value=None)
+    with col4:
+        date_to = st.date_input("To date", value=None)
+
+    # Join steeps with teas for filtering/context
+    if "tea_id" in steeps_df.columns and "tea_id" in teas_df.columns:
+        joined = steeps_df.merge(teas_df[["tea_id","name","type","supplier"]], on="tea_id", how="left")
+    else:
+        joined = steeps_df.copy()
+        joined["name"] = None
+        joined["type"] = None
+        joined["supplier"] = None
+
+    joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
+
+    # Apply filters
+    mask = pd.Series([True]*len(joined))
+    if tea_type_filter != "(all)":
+        mask &= (joined["type"].str.lower() == tea_type_filter)
+    if supplier_filter:
+        mask &= joined["supplier"].fillna("").str.contains(supplier_filter, case=False, na=False)
+    if date_from:
+        mask &= (joined["session_at"].dt.date >= date_from)
+    if date_to:
+        mask &= (joined["session_at"].dt.date <= date_to)
+
+    joined_filt = joined[mask].copy()
+
+    # Build long-form per-steep scores for chart
+    long_scores = []
+    for _, r in joined_filt.iterrows():
+        df = expand_steep_scores_row(r)
+        if df is not None:
+            long_scores.append(df)
+    if long_scores:
+        long_scores = pd.concat(long_scores, ignore_index=True)
+        long_scores["session_at"] = ensure_datetime(long_scores["session_at"])
+    else:
+        long_scores = pd.DataFrame(columns=["steep_number","steep_score","session_at"])
+
+    st.markdown("### 📈 Steep Scores (markers per steep + average line)")
+    plot_steeps_with_average(long_scores, title="Steep Scores (touch-friendly, responsive)")
+
+    st.markdown("### 📋 Data preview")
     st.dataframe(joined_filt.sort_values("session_at", ascending=False), use_container_width=True)

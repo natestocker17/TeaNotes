@@ -1,8 +1,8 @@
 # app.py
-# Streamlit + Supabase tea notes app (matching your latest schema)
+# Streamlit + Supabase tea notes app (matching your latest schema + URL, steep_notes)
 
 import os
-from datetime import datetime
+from datetime import datetime, date, time
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
@@ -18,7 +18,6 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 
 # ---------- Helpers ----------
 @st.cache_data(ttl=60)
@@ -61,7 +60,6 @@ def insert_steep(payload: dict):
     except Exception as e:
         return False, str(e)
 
-
 # ---------- UI ----------
 tab_add_tea, tab_add_steep, tab_browse = st.tabs(["Add Tea", "Add Steep", "Browse"])
 
@@ -78,7 +76,7 @@ with tab_add_tea:
     with col2:
         oxidation = st.text_input("Oxidation", placeholder="e.g., light / medium / heavy")
         roasting = st.text_input("Roasting", placeholder="e.g., none / light / medium / dark")
-        cultivar = st.text_input("Cultivar", placeholder="e.g., Jin Guanyin, Tieguanyin")
+        cultivar = st.text_input("Cultivar", placeholder="e.g., Jin Xuan, Tieguanyin")
         region = st.text_input("Region", placeholder="e.g., Wuyi, Fujian, China")
 
     with col3:
@@ -86,6 +84,9 @@ with tab_add_tea:
         picking_season = st.text_input("Picking season", placeholder="e.g., Spring")
         pick_year = st.number_input("Pick year", min_value=1900, max_value=2100, value=2025, step=1)
         supplier = st.text_input("Supplier", placeholder="e.g., Teavivre")
+
+    # NEW: URL field (carry through to DB)
+    url = st.text_input("Product URL", placeholder="https://…")
 
     if st.button("Save Tea", type="primary", use_container_width=True, disabled=(name.strip() == "")):
         payload = {
@@ -101,6 +102,7 @@ with tab_add_tea:
             "picking_season": picking_season.strip() or None,
             "pick_year": int(pick_year) if pick_year else None,
             "supplier": supplier.strip() or None,
+            "url": url.strip() or None,   # NEW
             # created_at auto
         }
         ok, res = insert_tea(payload)
@@ -134,10 +136,17 @@ with tab_add_steep:
         with col2:
             initial_steep_time_sec = st.number_input("Initial steep time (sec)", min_value=0, max_value=3600, value=15, step=1)
             amount_used_g = st.number_input("Amount used (g)", min_value=0.0, max_value=200.0, value=5.0, step=0.1)
-            session_at = st.datetime_input("Session time", value=datetime.now())
+
+            # FIX: Streamlit has no st.datetime_input → use date + time inputs
+            session_date = st.date_input("Session date", value=datetime.now().date())
+            session_time = st.time_input("Session time", value=datetime.now().time().replace(microsecond=0))
+            session_at = datetime.combine(session_date, session_time)
+
         with col3:
             steep_time_changes = st.text_input("Steep time changes", placeholder="e.g., +5s each steep, 15/20/25s ...")
             tasting_notes = st.text_area("Tasting notes", placeholder="aroma, taste, aftertaste, texture, energy...")
+            # NEW: free-form per-session notes
+            steep_notes = st.text_area("Steep notes", placeholder="Water, vessel, rinses, adjustments…")
 
         if st.button("Save Steep", type="primary", use_container_width=True):
             payload = {
@@ -150,6 +159,7 @@ with tab_add_steep:
                 "temperature_c": int(temperature_c),
                 "amount_used_g": float(amount_used_g),
                 "session_at": session_at.isoformat(),
+                "steep_notes": steep_notes.strip() or None,   # NEW
             }
             ok, res = insert_steep(payload)
             if ok:
@@ -174,7 +184,11 @@ with tab_browse:
                 default=[]
             )
         with c2:
-            min_year, max_year = (int(teas_df["pick_year"].min()), int(teas_df["pick_year"].max())) if ("pick_year" in teas_df and not teas_df["pick_year"].dropna().empty) else (2000, 2100)
+            if ("pick_year" in teas_df) and (not teas_df["pick_year"].dropna().empty):
+                min_year = int(teas_df["pick_year"].min())
+                max_year = int(teas_df["pick_year"].max())
+            else:
+                min_year, max_year = 2000, 2100
             year_range = st.slider("Pick year range", min_year, max_year, (min_year, max_year))
         with c3:
             supplier_filter = st.multiselect(
@@ -188,8 +202,10 @@ with tab_browse:
     if tea_filter:
         teas_filtered = teas_filtered[teas_filtered["name"].isin(tea_filter)]
     if "pick_year" in teas_filtered:
-        teas_filtered = teas_filtered[(teas_filtered["pick_year"].fillna(0) >= year_range[0]) &
-                                      (teas_filtered["pick_year"].fillna(9999) <= year_range[1])]
+        teas_filtered = teas_filtered[
+            (teas_filtered["pick_year"].fillna(0) >= year_range[0]) &
+            (teas_filtered["pick_year"].fillna(9999) <= year_range[1])
+        ]
     if supplier_filter:
         teas_filtered = teas_filtered[teas_filtered["supplier"].isin(supplier_filter)]
 

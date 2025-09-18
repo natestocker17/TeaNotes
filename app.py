@@ -166,11 +166,11 @@ def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
 
     st.plotly_chart(fig, use_container_width=True)
 
-# -------------------- Tabs: 1) Add Session (default)  2) Add Tea  3) Browse --------------------
+# -------------------- Tabs --------------------
+# 1) Add Session  2) Add Tea  3) Steep history  4) Analysis
+tabs = st.tabs(["📝 Add Session", "➕ Add Tea", "📜 Steep history", "📊 Analysis"])
 
-tabs = st.tabs(["📝 Add Session", "➕ Add Tea", "🔎 Browse"])
-
-# ---------- Tab 1: Add Session (default) ----------
+# ---------- Tab 1: Add Session (unchanged) ----------
 with tabs[0]:
     tea_choices = ["(select)"] + teas_df.get("name", pd.Series(dtype=str)).fillna("(unnamed)").tolist()
     tea_selected = st.selectbox("Tea", tea_choices, index=0)
@@ -215,7 +215,7 @@ with tabs[0]:
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
-# ---------- Tab 2: Add Tea ----------
+# ---------- Tab 2: Add Tea (unchanged) ----------
 with tabs[1]:
     colA, colB = st.columns(2)
 
@@ -278,9 +278,9 @@ with tabs[1]:
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
-# ---------- Tab 3: Browse (re-hauled) ----------
+# ---------- Tab 3: 📜 Steep history ----------
 with tabs[2]:
-    st.subheader("🔎 Browse & Compare")
+    st.subheader("📜 Steep history")
 
     # Join steeps to teas for richer display
     if "tea_id" in steeps_df.columns and "tea_id" in teas_df.columns:
@@ -297,38 +297,18 @@ with tabs[2]:
     joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
     joined = joined.sort_values("session_at", ascending=False)
 
-    # ---- Controls
-    left, right = st.columns([2, 1])
+    # Tea chooser
+    tea_names = (
+        teas_df.get("name", pd.Series(dtype=str))
+        .dropna().astype(str).str.strip()
+    )
+    tea_names = tea_names[tea_names != ""].unique().tolist()
+    tea_names_sorted = sorted(tea_names)
 
-    with left:
-        tea_names = (
-            teas_df.get("name", pd.Series(dtype=str))
-            .dropna().astype(str).str.strip()
-        )
-        tea_names = tea_names[tea_names != ""].unique().tolist()
-        tea_names_sorted = sorted(tea_names)
-        selected_tea = st.selectbox("Find a tea", options=["(all teas)"] + tea_names_sorted, index=0)
+    selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0)
 
-    with right:
-        with st.expander("Optional filters"):
-            tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0)
-            supplier_filter = st.text_input("Supplier contains", value="")
-
-    # ---- Apply filters for chart scope
-    scope_mask = pd.Series(True, index=joined.index)
-    if tea_type_filter != "(all)":
-        scope_mask &= joined["type"].fillna("").str.lower() == tea_type_filter.lower()
-    if supplier_filter:
-        scope_mask &= joined["supplier"].fillna("").str.contains(supplier_filter, case=False, na=False)
-    scope_df = joined[scope_mask].copy()
-
-    # ---- 1) Box & whisker across teas (uses current filter scope)
-    st.markdown("### Box & whisker by tea")
-    plot_box_by_tea(scope_df)
-
-    # ---- 2) Steeping notes for the selected tea
     st.markdown("### Steeping notes")
-    if selected_tea == "(all teas)":
+    if selected_tea == "(select a tea)":
         st.info("Select a tea above to see all of its steeping notes.")
     else:
         tea_rows = joined[joined["name"] == selected_tea].copy()
@@ -363,3 +343,44 @@ with tabs[2]:
             tea_rows = tea_rows.rename(columns=rename_map)
 
             st.dataframe(tea_rows, use_container_width=True)
+
+# ---------- Tab 4: 📊 Analysis ----------
+with tabs[3]:
+    st.subheader("📊 Analysis")
+
+    # Join steeps to teas for charting
+    if "tea_id" in steeps_df.columns and "tea_id" in teas_df.columns:
+        joined = steeps_df.merge(
+            teas_df[["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]],
+            on="tea_id", how="left"
+        )
+    else:
+        joined = steeps_df.copy()
+        for col in ["name", "type", "supplier", "region", "cultivar", "roasting"]:
+            if col not in joined.columns:
+                joined[col] = None
+
+    joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
+
+    # Filters for analysis scope
+    left, right = st.columns([1, 1])
+    with left:
+        tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0)
+    with right:
+        supplier_filter = st.text_input("Supplier contains", value="")
+
+    scope_mask = pd.Series(True, index=joined.index)
+    if tea_type_filter != "(all)":
+        scope_mask &= joined["type"].fillna("").str.lower() == tea_type_filter.lower()
+    if supplier_filter:
+        scope_mask &= joined["supplier"].fillna("").str.contains(supplier_filter, case=False, na=False)
+
+    scope_df = joined[scope_mask].copy()
+
+    st.markdown("### Box & whisker by tea")
+    plot_box_by_tea(scope_df)
+
+    with st.expander("View data used in chart"):
+        show_cols = ["name", "rating", "supplier", "type", "session_at", "tasting_notes", "steep_notes"]
+        present_cols = [c for c in show_cols if c in scope_df.columns]
+        st.dataframe(scope_df[present_cols].sort_values("name"), use_container_width=True)

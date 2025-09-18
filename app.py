@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-from streamlit import column_config  # for st.column_config.TextColumn
+from streamlit import column_config  # OK even if not strictly needed
 
 # Optional Supabase
 try:
@@ -18,12 +18,11 @@ except Exception:
 st.set_page_config(page_title="Tea Notes (Steeps)", page_icon="🍵", layout="wide")
 st.title("🍵 Tea Notes — Sessions & Scores")
 
-# -------------------- (tiny CSS) make the radio look like tabs --------------------
+# -------------------- CSS --------------------
 st.markdown("""
 <style>
-/* Hide the label gap */
+/* Make the radio look like tabs */
 [data-testid="stHorizontalBlock"] > div:has(> div[data-testid="stRadio"]) { margin-bottom: 0.5rem; }
-/* Style radio as tabs */
 div[data-testid="stRadio"] > div[role="radiogroup"] {
   display: flex; gap: .25rem; flex-wrap: wrap;
 }
@@ -37,6 +36,17 @@ div[data-testid="stRadio"] label[data-checked="true"] {
   background: var(--background-color);
   border-bottom-color: var(--background-color);
   box-shadow: 0 -2px 0 0 var(--primary-color) inset;
+}
+
+/* Force text wrapping in DataFrame/Data Editor cells */
+[data-testid="stDataFrame"] div[role="gridcell"],
+[data-testid="stDataFrame"] div[data-testid="cell-container"],
+[data-testid="stDataFrame"] td, 
+[data-testid="stDataFrame"] span, 
+[data-testid="stDataFrame"] p {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -365,13 +375,15 @@ elif st.session_state.active_tab == "📜 Steep history":
             }
             tea_rows = tea_rows.rename(columns=rename_map)
 
-            # Wrap text in Tasting notes & Steep notes
-            st.dataframe(
+            # Use read-only data editor; CSS above ensures wrapping
+            st.data_editor(
                 tea_rows,
                 use_container_width=True,
+                disabled=True,
+                hide_index=False,
                 column_config={
-                    "Tasting notes": st.column_config.TextColumn("Tasting notes", wrap=True),
-                    "Steep notes": st.column_config.TextColumn("Steep notes", wrap=True),
+                    "Tasting notes": st.column_config.TextColumn("Tasting notes"),
+                    "Steep notes": st.column_config.TextColumn("Steep notes"),
                 },
             )
 
@@ -397,9 +409,12 @@ elif st.session_state.active_tab == "📊 Analysis":
     with left:
         tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0, key="analysis_type")
     with right:
-        # Supplier as a dropdown (built from teas_df)
+        # Supplier dropdown from distinct values
         supplier_opts = sorted(
-            teas_df.get("supplier", pd.Series(dtype=str)).dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
+            teas_df.get("supplier", pd.Series(dtype=str))
+                   .dropna().astype(str).str.strip()
+                   .replace("", pd.NA).dropna()
+                   .unique().tolist()
         )
         supplier_filter = st.selectbox("Supplier", options=["(all)"] + supplier_opts, index=0, key="analysis_supplier")
 
@@ -416,4 +431,4 @@ elif st.session_state.active_tab == "📊 Analysis":
     with st.expander("View data used in chart"):
         show_cols = ["name", "rating", "supplier", "type", "session_at", "tasting_notes", "steep_notes"]
         present_cols = [c for c in show_cols if c in scope_df.columns]
-        st.dataframe(scope_df[present_cols].sort_values("name"), use_container_width=True)
+        st.data_editor(scope_df[present_cols].sort_values("name"), use_container_width=True, disabled=True)

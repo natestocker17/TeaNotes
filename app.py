@@ -121,14 +121,11 @@ def safe_index(options: List[str], value: Any, default: int = 0) -> int:
     """Return a valid index for Streamlit selectbox; fall back to default if missing."""
     if value is None:
         return default
-    # Normalize to str for robust membership checks
     try:
         v = str(value).strip()
     except Exception:
         return default
-    if v in options:
-        return options.index(v)
-    return default
+    return options.index(v) if v in options else default
 
 def plot_sessions_with_average(df: pd.DataFrame, title: str = "Session ratings"):
     if df.empty or "rating" not in df.columns:
@@ -206,15 +203,12 @@ def _json_sanitize(value: Any) -> Any:
     if isinstance(value, (pd.Timestamp, )):
         if pd.isna(value):
             return None
-        # ISO8601 (UTC if tz-aware or naive => assume UTC)
         try:
             return pd.to_datetime(value, utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
         except Exception:
             return str(value)
-    # pandas NA/NaT or numpy nan
     if pd.isna(value):
         return None
-    # numpy scalars -> python scalars
     if isinstance(value, np.generic):
         return value.item()
     return value
@@ -229,7 +223,6 @@ def update_supabase_rows(table: str, pk_col: str, rows: List[Dict[str, Any]]) ->
         if pk_val is None or (isinstance(pk_val, float) and np.isnan(pk_val)):
             errs.append(f"Missing {pk_col} in row; skipped.")
             continue
-        # Sanitize payload (convert NaN/NaT -> None; numpy scalars -> python)
         payload = {k: _json_sanitize(v) for k, v in r.items() if k != pk_col}
         try:
             SUPABASE.table(table).update(payload).eq(pk_col, pk_val).execute()  # type: ignore
@@ -246,12 +239,71 @@ def diff_rows(original: pd.DataFrame, edited: pd.DataFrame, pk_col: str, editabl
     cols = [c for c in editable_cols if c in left.columns and c in right.columns]
     if not cols:
         return edited.iloc[0:0].copy()
-    # Normalize NaNs so both NaN compare equal
     l = left[cols].applymap(lambda x: None if pd.isna(x) else x)
     r = right[cols].applymap(lambda x: None if pd.isna(x) else x)
     changed_mask = (l != r).any(axis=1)
     changed_idx = changed_mask[changed_mask].index
     return edited[edited[pk_col].isin(changed_idx)].copy()
+
+# --- types for steeps & payload builder ---
+INT_COLS_STEEP = ["initial_steep_time_sec", "temperature_c"]
+FLOAT_COLS_STEEP = ["rating", "amount_used_g"]
+
+def _to_iso_utc_or_none(value):
+    if value is None or (isinstance(value, str) and value.strip() == "") or pd.isna(value):
+        return None
+    ts = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(ts):
+        return None
+    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str, Any]]:
+    """Coerce edited values to JSON-safe, DB-correct types."""
+    payloads: List[Dict[str, Any]] = []
+    for _, r in changed_df.iterrows():
+        rec: Dict[str, Any] = {pk_col: r[pk_col]}
+        cols = [
+            "session_at", "rating",
+            "tasting_notes", "steep_notes",
+            "initial_steep_time_sec", "steep_time_changes",
+            "temperature_c", "amount_used_g",
+        ]
+        for c in cols:
+            if c not in changed_df.columns:
+                continue
+            v = r[c]
+
+            if c == "session_at":
+                val = _to_iso_utc_or_none(v)
+
+            elif c in INT_COLS_STEEP:
+                if v is None or (isinstance(v, str) and v.strip() == "") or pd.isna(v):
+                    val = None
+                else:
+                    try:
+                        val = int(round(float(v)))
+                    except Exception:
+                        val = None
+
+            elif c in FLOAT_COLS_STEEP:
+                if v is None or (isinstance(v, str) and v.strip() == "") or pd.isna(v):
+                    val = None
+                else:
+                    try:
+                        val = float(v)
+                    except Exception:
+                        val = None
+
+            else:
+                if v is None or (isinstance(v, str) and v.strip() == "") or (not isinstance(v, str) and pd.isna(v)):
+                    val = None
+                else:
+                    val = v
+
+            rec[c] = val
+
+        payloads.append(rec)
+    return payloads
 
 # -------------------- Sticky tab-like nav --------------------
 NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history", "📊 Analysis"]
@@ -397,7 +449,6 @@ elif st.session_state.active_tab == "✏️ Edit tea":
             else:
                 tea_pk_val = row.iloc[0][tea_pk]
 
-                # Safe indices for selectboxes
                 type_options = [""] + TEA_TYPES
                 roast_options = [""] + ROASTING_OPTIONS
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
@@ -434,12 +485,11 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "oxidation": (oxidation_new.strip() or None),
                             "roasting": (roasting_new.strip() or None),
                         }
-                        # Sanitize payload values
                         payload = {k: _json_sanitize(v) for k, v in payload.items()}
                         try:
                             SUPABASE.table("teas").update(payload).eq(tea_pk, tea_pk_val).execute()  # type: ignore
                             st.success("Tea updated.")
-                            st.cache_data.clear()  # refresh cached data
+                            st.cache_data.clear()
                         except Exception as e:
                             st.error(f"Failed to update: {e}")
 
@@ -478,28 +528,25 @@ elif st.session_state.active_tab == "📜 Steep history":
         if rows.empty:
             st.warning("No sessions found for this tea yet.")
         else:
-            # Detect PK for steeps
             steep_pk = get_pk_column(rows, ["steep_id", "id"])
             if steep_pk is None:
                 st.warning("Could not determine the steep primary key column (expected 'steep_id' or 'id'). Editing is disabled.")
                 st.dataframe(rows.sort_values("session_at", ascending=False), use_container_width=True)
             else:
-                # Choose columns to show/edit
                 display_cols = [
                     steep_pk, "session_at", "rating",
                     "tasting_notes", "steep_notes",
                     "initial_steep_time_sec", "steep_time_changes",
                     "temperature_c", "amount_used_g",
-                    # meta (read-only for context)
+                    # meta (read-only)
                     "type", "supplier", "region", "cultivar", "roasting",
                 ]
                 present_cols = [c for c in display_cols if c in rows.columns]
                 rows = rows[present_cols].copy()
 
-                # Remember original for diffing
+                # Remember original for diffing on this tea
                 st.session_state["orig_steeps_df"] = rows.copy()
 
-                # Editor config: meta columns read-only
                 readonly_cols = ["type", "supplier", "region", "cultivar", "roasting"]
                 col_conf = {}
                 for c in present_cols:
@@ -512,7 +559,6 @@ elif st.session_state.active_tab == "📜 Steep history":
                     elif c in ["initial_steep_time_sec", "temperature_c"]:
                         col_conf[c] = st.column_config.NumberColumn(c, step=1, format="%d")
                     elif c == "session_at":
-                        # Keep generic column to avoid version issues with DatetimeColumn
                         col_conf[c] = st.column_config.Column(c)
                     elif c == steep_pk:
                         col_conf[c] = st.column_config.Column(c, disabled=True)
@@ -541,23 +587,7 @@ elif st.session_state.active_tab == "📜 Steep history":
                         if changed.empty:
                             st.info("No changes to save.")
                         else:
-                            # Normalize datatypes
-                            if "rating" in changed.columns:
-                                changed["rating"] = pd.to_numeric(changed["rating"], errors="coerce")
-                            if "amount_used_g" in changed.columns:
-                                changed["amount_used_g"] = pd.to_numeric(changed["amount_used_g"], errors="coerce")
-                            for col in ["initial_steep_time_sec", "temperature_c"]:
-                                if col in changed.columns:
-                                    changed[col] = pd.to_numeric(changed[col], errors="coerce")
-                            if "session_at" in changed.columns:
-                                # Convert to ISO8601 UTC, keep None for invalid
-                                sa = pd.to_datetime(changed["session_at"], errors="coerce", utc=True)
-                                changed["session_at"] = sa.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-                            payloads = changed[[steep_pk] + [c for c in editable_cols if c in changed.columns]].to_dict(orient="records")
-                            # Final sanitize before update
-                            payloads = [{k: _json_sanitize(v) if k != steep_pk else v for k, v in rec.items()} for rec in payloads]
-
+                            payloads = build_steep_payloads(changed, steep_pk)
                             errors = update_supabase_rows("steeps", steep_pk, payloads)
                             if errors:
                                 for e in errors:

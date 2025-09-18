@@ -122,8 +122,6 @@ tabs = st.tabs(["📝 Add Session", "➕ Add Tea", "🔎 Browse"])
 
 # ---------- Tab 1: Add Session (default) ----------
 with tabs[0]:
-    st.caption("Record a tasting session (single overall score).")
-    # Select Tea
     tea_choices = ["(select)"] + teas_df.get("name", pd.Series(dtype=str)).fillna("(unnamed)").tolist()
     tea_selected = st.selectbox("Tea", tea_choices, index=0)
     tea_selected_row = None
@@ -133,20 +131,19 @@ with tabs[0]:
     if tea_selected_row is not None and not tea_selected_row.empty:
         tea_id = tea_selected_row.iloc[0].get("tea_id")
 
-    # --- Steep timing fields ---
-    initial_secs = st.number_input("Initial steep time (seconds)", min_value=0, step=5, value=15, help="First infusion length.")
-    changes_text = st.text_input("Steep time changes (after initial; comma-separated ±seconds)", value="5,10,15")
+    initial_secs = st.number_input("Initial steep time (seconds)", min_value=0, step=5, value=15)
+    changes_text = st.text_input("Steep time changes (comma-separated ±seconds)", value="5,10,15")
 
     temperature_c = st.number_input("Water temperature (°C)", min_value=0, max_value=100, value=95)
     amount_used_g = st.number_input("Tea amount used (g)", min_value=0.0, step=0.5, value=5.0)
-    tasting_notes = st.text_area("Tasting notes", placeholder="Aroma, texture, aftertaste, etc.")
+    tasting_notes = st.text_area("Tasting notes")
 
     overall_rating = st.slider("Overall rating (0–100)", min_value=0, max_value=100, value=80)
 
     save_session_btn = st.button("Save Session", type="primary", use_container_width=True)
     if save_session_btn:
         if tea_id is None:
-            st.error("Please select a tea first (use the 'Add Tea' tab if needed).")
+            st.error("Please select a tea first.")
         else:
             row = {
                 "tea_id": tea_id,
@@ -161,18 +158,17 @@ with tabs[0]:
                 "steep_scores_json": None,
             }
             if DEMO_MODE:
-                st.success("Demo mode: session captured locally (not persisted).")
+                st.success("Saved (demo mode).")
                 steeps_df.loc[len(steeps_df)] = row
             else:
                 try:
                     SUPABASE.table("steeps").insert(row).execute()  # type: ignore
-                    st.success("Session saved to Supabase.")
+                    st.success("Saved.")
                 except Exception as e:
-                    st.error(f"Failed to save session: {e}")
+                    st.error(f"Failed to save: {e}")
 
 # ---------- Tab 2: Add Tea ----------
 with tabs[1]:
-    st.caption("Add a tea to your catalogue. Dropdowns are pre-populated with previous values, but you can type a new one.")
     colA, colB = st.columns(2)
 
     # Pre-populated options from existing data
@@ -180,25 +176,23 @@ with tabs[1]:
     supplier_opts = options_from_column(teas_df, "supplier")
     cultivar_opts = options_from_column(teas_df, "cultivar")
     region_opts = options_from_column(teas_df, "region")
-    oxidation_opts = options_from_column(teas_df, "oxidation")
 
     with colA:
-        tea_name = st.text_input("Tea name", placeholder="e.g., Lao Cong Mi Lan Xiang")
-        tea_type = st.selectbox("Tea type", options=TEA_TYPES, index=0, help="Choose the main style of the tea.")
+        tea_name = st.text_input("Tea name")
+        tea_type = st.selectbox("Tea type", options=TEA_TYPES, index=0)
         subtype_sel = st.selectbox("Subtype", options=[""] + subtype_opts, index=0)
-        subtype_new = st.text_input("Or add new Subtype", value="")
+        subtype_new = st.text_input("Or add new Subtype")
         supplier_sel = st.selectbox("Supplier", options=[""] + supplier_opts, index=0)
-        supplier_new = st.text_input("Or add new Supplier", value="")
-        url = st.text_input("URL (optional)")
+        supplier_new = st.text_input("Or add new Supplier")
+        url = st.text_input("URL")
     with colB:
         cultivar_sel = st.selectbox("Cultivar", options=[""] + cultivar_opts, index=0)
-        cultivar_new = st.text_input("Or add new Cultivar", value="")
+        cultivar_new = st.text_input("Or add new Cultivar")
         region_sel = st.selectbox("Region", options=[""] + region_opts, index=0)
-        region_new = st.text_input("Or add new Region", value="")
+        region_new = st.text_input("Or add new Region")
         current_year = datetime.now().year
         pick_year = st.number_input("Pick year", min_value=1900, max_value=current_year, step=1, value=current_year)
-        oxidation_sel = st.selectbox("Oxidation", options=[""] + oxidation_opts, index=0)
-        oxidation_new = st.text_input("Or add new Oxidation", value="")
+        oxidation = st.text_input("Oxidation")
         roasting = st.selectbox("Roasting", options=ROASTING_OPTIONS, index=0)
 
     # Resolve chosen vs new values
@@ -206,7 +200,6 @@ with tabs[1]:
     supplier = (supplier_new.strip() or supplier_sel.strip() or None)
     cultivar = (cultivar_new.strip() or cultivar_sel.strip() or None)
     region = (region_new.strip() or region_sel.strip() or None)
-    oxidation = (oxidation_new.strip() or oxidation_sel.strip() or None)
 
     add_tea_btn = st.button("Save Tea", type="primary", use_container_width=True)
     if add_tea_btn:
@@ -222,28 +215,27 @@ with tabs[1]:
                 "cultivar": cultivar,
                 "region": region,
                 "pick_year": int(pick_year) if pick_year else None,
-                "oxidation": oxidation,
+                "oxidation": oxidation or None,
                 "roasting": roasting,
                 "created_at": datetime.utcnow().isoformat()
             }
             if DEMO_MODE:
-                st.success("Demo mode: tea captured locally (not persisted).")
+                st.success("Saved (demo mode).")
                 teas_df.loc[len(teas_df)] = tea_row
             else:
                 try:
                     SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
-                    st.success("Tea saved to Supabase.")
+                    st.success("Saved.")
                 except Exception as e:
-                    st.error(f"Failed to save tea: {e}")
+                    st.error(f"Failed to save: {e}")
 
 # ---------- Tab 3: Browse ----------
 with tabs[2]:
-    st.caption("Explore your sessions and teas. Filters below affect the table and chart.")
     col1, col2 = st.columns([1,1])
     with col1:
         tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0)
     with col2:
-        supplier_filter = st.text_input("Supplier contains", value="")
+        supplier_filter = st.text_input("Supplier contains")
 
     if "tea_id" in steeps_df.columns and "tea_id" in teas_df.columns:
         joined = steeps_df.merge(teas_df[["tea_id","name","type","supplier"]], on="tea_id", how="left")
@@ -263,8 +255,8 @@ with tabs[2]:
 
     joined_filt = joined[mask].copy()
 
-    st.markdown("### 📈 Session Ratings (markers + average line)")
-    plot_sessions_with_average(joined_filt, title="Session Ratings (touch-friendly, responsive)")
+    st.markdown("### Session Ratings")
+    plot_sessions_with_average(joined_filt, title="Session Ratings")
 
-    st.markdown("### 📋 Data preview")
+    st.markdown("### Data")
     st.dataframe(joined_filt.sort_values("session_at", ascending=False), use_container_width=True)

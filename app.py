@@ -39,6 +39,8 @@ SUPABASE = get_supabase()
 
 @st.cache_data(ttl=60)
 def load_data() -> Dict[str, pd.DataFrame]:
+    if SUPABASE is None:
+        return {"teas": pd.DataFrame(), "steeps": pd.DataFrame()}
     teas = pd.DataFrame(SUPABASE.table("teas").select("*").execute().data)  # type: ignore
     steeps = pd.DataFrame(SUPABASE.table("steeps").select("*").execute().data)  # type: ignore
     return {"teas": teas, "steeps": steeps}
@@ -62,6 +64,24 @@ def options_from_column(df: pd.DataFrame, col: str) -> List[str]:
     vals = vals[vals != ""]
     opts = sorted(vals.unique().tolist())
     return opts
+
+def safe_int(text: str) -> Optional[int]:
+    text = (text or "").strip()
+    if text == "":
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
+
+def safe_float(text: str) -> Optional[float]:
+    text = (text or "").strip()
+    if text == "":
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
 
 def plot_sessions_with_average(df: pd.DataFrame, title: str = "Session ratings"):
     if df.empty or "rating" not in df.columns:
@@ -108,33 +128,34 @@ with tabs[0]:
     if tea_selected_row is not None and not tea_selected_row.empty:
         tea_id = tea_selected_row.iloc[0].get("tea_id")
 
-    initial_secs = st.number_input("Initial steep time (seconds)", min_value=0, step=5, value=15)
-    changes_text = st.text_input("Steep time changes", value="+5 seconds per steep")
-
-    temperature_c = st.number_input("Water temperature (°C)", min_value=0, max_value=100, value=95)
-    amount_used_g = st.number_input("Tea amount used (g)", min_value=0.0, step=0.5, value=5.0)
-    tasting_notes = st.text_area("Tasting notes")
-
-    overall_rating = st.number_input("Overall rating", min_value=0.0, step=0.1, max_value=5.0, value=0.0)
+    # All optional except Tea
+    initial_secs_txt = st.text_input("Initial steep time (seconds)", value="")
+    changes_text = st.text_input("Steep time changes", value="")
+    temperature_c_txt = st.text_input("Water temperature (°C)", value="")
+    amount_used_g_txt = st.text_input("Tea amount used (g)", value="")
+    tasting_notes = st.text_area("Tasting notes", value="")
+    steep_notes = st.text_area("Steep notes", value="")
+    overall_rating_txt = st.text_input("Overall rating (0–5)", value="")
 
     save_session_btn = st.button("Save Session", type="primary", use_container_width=True)
     if save_session_btn:
         if tea_id is None:
             st.error("Please select a tea first.")
+        elif SUPABASE is None:
+            st.error("Database is not configured.")
         else:
             row = {
                 "tea_id": tea_id,
-                "tasting_notes": tasting_notes or None,
-                "steep_notes": steep_notes or None,
-                "rating": float(overall_rating),
+                "tasting_notes": (tasting_notes or None),
+                "steep_notes": (steep_notes or None),
+                "rating": safe_float(overall_rating_txt),
                 "steeps": None,
-                "initial_steep_time_sec": int(initial_secs),
-                "steep_time_changes": changes_text or None,
-                "temperature_c": int(temperature_c),
-                "amount_used_g": float(amount_used_g),
+                "initial_steep_time_sec": safe_int(initial_secs_txt),
+                "steep_time_changes": (changes_text or None),
+                "temperature_c": safe_int(temperature_c_txt),
+                "amount_used_g": safe_float(amount_used_g_txt),
                 "session_at": datetime.utcnow().isoformat()
             }
-
             try:
                 SUPABASE.table("steeps").insert(row).execute()  # type: ignore
                 st.success("Saved.")
@@ -152,45 +173,50 @@ with tabs[1]:
     region_opts = options_from_column(teas_df, "region")
 
     with colA:
-        tea_name = st.text_input("Tea name")
-        tea_type = st.selectbox("Tea type", options=TEA_TYPES, index=0)
-        subtype_sel = st.selectbox("Subtype", options=[""] + subtype_opts, index=0)
-        subtype_new = st.text_input("Or add new Subtype")
-        supplier_sel = st.selectbox("Supplier", options=[""] + supplier_opts, index=0)
-        supplier_new = st.text_input("Or add new Supplier")
-        url = st.text_input("URL")
+        tea_name = st.text_input("Tea name (required)")
+        tea_type = st.selectbox("Tea type (optional)", options=[""] + TEA_TYPES, index=0)
+        subtype_sel = st.selectbox("Subtype (optional)", options=[""] + subtype_opts, index=0)
+        subtype_new = st.text_input("Or add new Subtype (optional)")
+        supplier_sel = st.selectbox("Supplier (optional)", options=[""] + supplier_opts, index=0)
+        supplier_new = st.text_input("Or add new Supplier (optional)")
+        url = st.text_input("URL (optional)")
     with colB:
-        cultivar_sel = st.selectbox("Cultivar", options=[""] + cultivar_opts, index=0)
-        cultivar_new = st.text_input("Or add new Cultivar")
-        region_sel = st.selectbox("Region", options=[""] + region_opts, index=0)
-        region_new = st.text_input("Or add new Region")
+        cultivar_sel = st.selectbox("Cultivar (optional)", options=[""] + cultivar_opts, index=0)
+        cultivar_new = st.text_input("Or add new Cultivar (optional)")
+        region_sel = st.selectbox("Region (optional)", options=[""] + region_opts, index=0)
+        region_new = st.text_input("Or add new Region (optional)")
         current_year = datetime.now().year
-        pick_year = st.number_input("Pick year", min_value=1900, max_value=current_year, step=1, value=current_year)
-        oxidation = st.text_input("Oxidation")
-        roasting = st.selectbox("Roasting", options=ROASTING_OPTIONS, index=0)
+        pick_year_txt = st.text_input(f"Pick year (≤ {current_year}, optional)", value="")
+        oxidation = st.text_input("Oxidation (optional)")
+        roasting = st.selectbox("Roasting (optional)", options=[""] + ROASTING_OPTIONS, index=0)
 
-    # Resolve chosen vs new values
+    # Resolve chosen vs new values (all optional)
     subtype = (subtype_new.strip() or subtype_sel.strip() or None)
     supplier = (supplier_new.strip() or supplier_sel.strip() or None)
     cultivar = (cultivar_new.strip() or cultivar_sel.strip() or None)
     region = (region_new.strip() or region_sel.strip() or None)
+    pick_year = safe_int(pick_year_txt) if pick_year_txt else None
+    roasting_val = roasting.strip() or None
+    tea_type_val = tea_type.strip() or None
 
     add_tea_btn = st.button("Save Tea", type="primary", use_container_width=True)
     if add_tea_btn:
-        if not tea_name:
+        if not tea_name.strip():
             st.error("Tea name is required.")
+        elif SUPABASE is None:
+            st.error("Database is not configured.")
         else:
             tea_row = {
-                "name": tea_name,
-                "type": tea_type,
+                "name": tea_name.strip(),
+                "type": tea_type_val,
                 "subtype": subtype,
                 "supplier": supplier,
-                "URL": url or None,
+                "URL": (url.strip() or None),
                 "cultivar": cultivar,
                 "region": region,
-                "pick_year": int(pick_year) if pick_year else None,
-                "oxidation": oxidation or None,
-                "roasting": roasting,
+                "pick_year": pick_year,
+                "oxidation": (oxidation.strip() or None),
+                "roasting": roasting_val,
                 "created_at": datetime.utcnow().isoformat()
             }
             try:

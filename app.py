@@ -17,6 +17,29 @@ except Exception:
 st.set_page_config(page_title="Tea Notes (Steeps)", page_icon="🍵", layout="wide")
 st.title("🍵 Tea Notes — Sessions & Scores")
 
+# -------------------- (tiny CSS) make the radio look like tabs --------------------
+st.markdown("""
+<style>
+/* Hide the label gap */
+[data-testid="stHorizontalBlock"] > div:has(> div[data-testid="stRadio"]) { margin-bottom: 0.5rem; }
+/* Style radio as tabs */
+div[data-testid="stRadio"] > div[role="radiogroup"] {
+  display: flex; gap: .25rem; flex-wrap: wrap;
+}
+div[data-testid="stRadio"] label {
+  border: 1px solid var(--secondary-background-color);
+  padding: .4rem .8rem; border-radius: .5rem .5rem 0 0;
+  background: var(--secondary-background-color); cursor: pointer;
+  font-weight: 500;
+}
+div[data-testid="stRadio"] label[data-checked="true"] {
+  background: var(--background-color);
+  border-bottom-color: var(--background-color);
+  box-shadow: 0 -2px 0 0 var(--primary-color) inset;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # -------------------- Config & Data Access --------------------
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
@@ -160,11 +183,24 @@ def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
     fig.update_yaxes(range=[0, 5])
     st.plotly_chart(fig, use_container_width=True)
 
-# -------------------- Tabs --------------------
-tabs = st.tabs(["📝 Add Session", "➕ Add Tea", "📜 Steep history", "📊 Analysis"])
+# -------------------- Sticky tab-like nav (no jumping; no extra buttons) --------------------
+NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "📜 Steep history", "📊 Analysis"]
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = NAV_ITEMS[0]
 
-# ---------- Tab 1: Add Session (unchanged) ----------
-with tabs[0]:
+st.session_state.active_tab = st.radio(
+    "Tabs",
+    NAV_ITEMS,
+    index=NAV_ITEMS.index(st.session_state.active_tab),
+    horizontal=True,
+    label_visibility="collapsed",
+    key="nav_radio",
+)
+
+# -------------------- Screens --------------------
+
+if st.session_state.active_tab == "📝 Add Session":
+    # ---------- Add Session (unchanged) ----------
     tea_choices = ["(select)"] + teas_df.get("name", pd.Series(dtype=str)).fillna("(unnamed)").tolist()
     tea_selected = st.selectbox("Tea", tea_choices, index=0, key="add_sess_tea")
     tea_selected_row = None
@@ -207,8 +243,8 @@ with tabs[0]:
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
-# ---------- Tab 2: Add Tea (unchanged) ----------
-with tabs[1]:
+elif st.session_state.active_tab == "➕ Add Tea":
+    # ---------- Add Tea (unchanged) ----------
     colA, colB = st.columns(2)
 
     subtype_opts = options_from_column(teas_df, "subtype")
@@ -267,8 +303,8 @@ with tabs[1]:
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
-# ---------- Tab 3: 📜 Steep history ----------
-with tabs[2]:
+elif st.session_state.active_tab == "📜 Steep history":
+    # ---------- Steep history ----------
     st.subheader("📜 Steep history")
 
     # Join steeps to teas for richer display
@@ -286,20 +322,17 @@ with tabs[2]:
     joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
     joined = joined.sort_values("session_at", ascending=False)
 
-    # ---- Controls in a FORM so changes don't trigger reruns until submitted
-    with st.form("steep_history_form", clear_on_submit=False):
-        tea_names = (
-            teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
-        )
-        tea_names = tea_names[tea_names != ""].unique().tolist()
-        tea_names_sorted = sorted(tea_names)
+    tea_names = (
+        teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
+    )
+    tea_names = tea_names[tea_names != ""].unique().tolist()
+    tea_names_sorted = sorted(tea_names)
 
-        selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
-        submitted = st.form_submit_button("Load")
+    selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
 
     st.markdown("### Steeping notes")
-    if not submitted or selected_tea == "(select a tea)":
-        st.info("Choose a tea and click **Load** to see all of its steeping notes.")
+    if selected_tea == "(select a tea)":
+        st.info("Select a tea above to see all of its steeping notes.")
     else:
         tea_rows = joined[joined["name"] == selected_tea].copy()
         if tea_rows.empty:
@@ -332,8 +365,8 @@ with tabs[2]:
             tea_rows = tea_rows.rename(columns=rename_map)
             st.dataframe(tea_rows, use_container_width=True)
 
-# ---------- Tab 4: 📊 Analysis ----------
-with tabs[3]:
+elif st.session_state.active_tab == "📊 Analysis":
+    # ---------- Analysis ----------
     st.subheader("📊 Analysis")
 
     # Join for charting
@@ -350,27 +383,18 @@ with tabs[3]:
 
     joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
 
-    # ---- Filters in a FORM so changes don't trigger reruns until submitted
-    with st.form("analysis_form", clear_on_submit=False):
-        left, right = st.columns([1, 1])
-        with left:
-            tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0, key="analysis_type")
-        with right:
-            supplier_filter = st.text_input("Supplier contains", value="", key="analysis_supplier")
+    left, right = st.columns([1, 1])
+    with left:
+        tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0, key="analysis_type")
+    with right:
+        supplier_filter = st.text_input("Supplier contains", value="", key="analysis_supplier")
 
-        apply_filters = st.form_submit_button("Update chart")
-
-    # Compute scope only after clicking "Update chart"
-    if not apply_filters:
-        st.info("Set filters and click **Update chart** to refresh the analysis.")
-        scope_df = joined.copy()
-    else:
-        scope_mask = pd.Series(True, index=joined.index)
-        if tea_type_filter != "(all)":
-            scope_mask &= joined["type"].fillna("").str.lower() == tea_type_filter.lower()
-        if supplier_filter:
-            scope_mask &= joined["supplier"].fillna("").str.contains(supplier_filter, case=False, na=False)
-        scope_df = joined[scope_mask].copy()
+    scope_mask = pd.Series(True, index=joined.index)
+    if tea_type_filter != "(all)":
+        scope_mask &= joined["type"].fillna("").str.lower() == tea_type_filter.lower()
+    if supplier_filter:
+        scope_mask &= joined["supplier"].fillna("").str.contains(supplier_filter, case=False, na=False)
+    scope_df = joined[scope_mask].copy()
 
     st.markdown("### Box & whisker by tea")
     plot_box_by_tea(scope_df)

@@ -132,7 +132,7 @@ with tabs[0]:
         tea_id = tea_selected_row.iloc[0].get("tea_id")
 
     initial_secs = st.number_input("Initial steep time (seconds)", min_value=0, step=5, value=15)
-    changes_text = st.text_input("Steep time changes (comma-separated ±seconds)", value="5,10,15")
+    changes_text = st.text_input("Steep time changes", value="+5 seconds per steep")
 
     temperature_c = st.number_input("Water temperature (°C)", min_value=0, max_value=100, value=95)
     amount_used_g = st.number_input("Tea amount used (g)", min_value=0.0, step=0.5, value=5.0)

@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+from streamlit import column_config  # for st.column_config.TextColumn
 
 # Optional Supabase
 try:
@@ -248,7 +249,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
     colA, colB = st.columns(2)
 
     subtype_opts = options_from_column(teas_df, "subtype")
-    supplier_opts = options_from_column(teas_df, "supplier")
+    supplier_opts_all = options_from_column(teas_df, "supplier")
     cultivar_opts = options_from_column(teas_df, "cultivar")
     region_opts = options_from_column(teas_df, "region")
 
@@ -257,7 +258,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
         tea_type = st.selectbox("Tea type", options=[""] + TEA_TYPES, index=0, key="add_tea_type")
         subtype_sel = st.selectbox("Subtype", options=[""] + subtype_opts, index=0, key="add_tea_subtype_sel")
         subtype_new = st.text_input("Or add new Subtype", key="add_tea_subtype_new")
-        supplier_sel = st.selectbox("Supplier", options=[""] + supplier_opts, index=0, key="add_tea_supplier_sel")
+        supplier_sel = st.selectbox("Supplier", options=[""] + supplier_opts_all, index=0, key="add_tea_supplier_sel")
         supplier_new = st.text_input("Or add new Supplier", key="add_tea_supplier_new")
         url = st.text_input("URL", key="add_tea_url")
     with colB:
@@ -363,7 +364,16 @@ elif st.session_state.active_tab == "📜 Steep history":
                 "roasting": "Roasting",
             }
             tea_rows = tea_rows.rename(columns=rename_map)
-            st.dataframe(tea_rows, use_container_width=True)
+
+            # Wrap text in Tasting notes & Steep notes
+            st.dataframe(
+                tea_rows,
+                use_container_width=True,
+                column_config={
+                    "Tasting notes": st.column_config.TextColumn("Tasting notes", wrap=True),
+                    "Steep notes": st.column_config.TextColumn("Steep notes", wrap=True),
+                },
+            )
 
 elif st.session_state.active_tab == "📊 Analysis":
     # ---------- Analysis ----------
@@ -387,13 +397,17 @@ elif st.session_state.active_tab == "📊 Analysis":
     with left:
         tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0, key="analysis_type")
     with right:
-        supplier_filter = st.text_input("Supplier contains", value="", key="analysis_supplier")
+        # Supplier as a dropdown (built from teas_df)
+        supplier_opts = sorted(
+            teas_df.get("supplier", pd.Series(dtype=str)).dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
+        )
+        supplier_filter = st.selectbox("Supplier", options=["(all)"] + supplier_opts, index=0, key="analysis_supplier")
 
     scope_mask = pd.Series(True, index=joined.index)
     if tea_type_filter != "(all)":
         scope_mask &= joined["type"].fillna("").str.lower() == tea_type_filter.lower()
-    if supplier_filter:
-        scope_mask &= joined["supplier"].fillna("").str.contains(supplier_filter, case=False, na=False)
+    if supplier_filter != "(all)":
+        scope_mask &= joined["supplier"].fillna("").str.lower() == supplier_filter.lower()
     scope_df = joined[scope_mask].copy()
 
     st.markdown("### Box & whisker by tea")

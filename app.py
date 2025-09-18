@@ -36,34 +36,11 @@ def get_supabase() -> Optional["Client"]:
         return None
 
 SUPABASE = get_supabase()
-DEMO_MODE = SUPABASE is None
 
 @st.cache_data(ttl=60)
 def load_data() -> Dict[str, pd.DataFrame]:
-    if DEMO_MODE:
-        teas_path = "/mnt/data/teas_rows.csv"
-        steeps_path = "/mnt/data/steeps_rows.csv"
-        if os.path.exists(teas_path) and os.path.exists(steeps_path):
-            teas = pd.read_csv(teas_path)
-            steeps = pd.read_csv(steeps_path)
-        else:
-            teas = pd.DataFrame(columns=[
-                "tea_id","name","type","subtype","processing_notes","oxidation","roasting",
-                "cultivar","region","elevation_m","picking_season","pick_year","supplier",
-                "created_at","URL","url"
-            ])
-            steeps = pd.DataFrame(columns=[
-                "steep_id","tea_id","tasting_notes","rating","steeps","initial_steep_time_sec",
-                "steep_time_changes","temperature_c","amount_used_g","session_at","steep_notes","steep_scores_json"
-            ])
-        if "steep_scores_json" not in steeps.columns:
-            steeps["steep_scores_json"] = None
-        return {"teas": teas, "steeps": steeps}
-
     teas = pd.DataFrame(SUPABASE.table("teas").select("*").execute().data)  # type: ignore
     steeps = pd.DataFrame(SUPABASE.table("steeps").select("*").execute().data)  # type: ignore
-    if "steep_scores_json" not in steeps.columns:
-        steeps["steep_scores_json"] = None
     return {"teas": teas, "steeps": steeps}
 
 db = load_data()
@@ -138,7 +115,7 @@ with tabs[0]:
     amount_used_g = st.number_input("Tea amount used (g)", min_value=0.0, step=0.5, value=5.0)
     tasting_notes = st.text_area("Tasting notes")
 
-    overall_rating = st.slider("Overall rating (0–100)", min_value=0, max_value=100, value=80)
+    overall_rating = st.number_input("Overall rating", min_value=0.0, step=0.1, max_value=5.0, value=0.0)
 
     save_session_btn = st.button("Save Session", type="primary", use_container_width=True)
     if save_session_btn:
@@ -148,24 +125,21 @@ with tabs[0]:
             row = {
                 "tea_id": tea_id,
                 "tasting_notes": tasting_notes or None,
+                "steep_notes": steep_notes or None,
                 "rating": float(overall_rating),
                 "steeps": None,
                 "initial_steep_time_sec": int(initial_secs),
                 "steep_time_changes": changes_text or None,
                 "temperature_c": int(temperature_c),
                 "amount_used_g": float(amount_used_g),
-                "session_at": datetime.utcnow().isoformat(),
-                "steep_scores_json": None,
+                "session_at": datetime.utcnow().isoformat()
             }
-            if DEMO_MODE:
-                st.success("Saved (demo mode).")
-                steeps_df.loc[len(steeps_df)] = row
-            else:
-                try:
-                    SUPABASE.table("steeps").insert(row).execute()  # type: ignore
-                    st.success("Saved.")
-                except Exception as e:
-                    st.error(f"Failed to save: {e}")
+
+            try:
+                SUPABASE.table("steeps").insert(row).execute()  # type: ignore
+                st.success("Saved.")
+            except Exception as e:
+                st.error(f"Failed to save: {e}")
 
 # ---------- Tab 2: Add Tea ----------
 with tabs[1]:
@@ -219,15 +193,11 @@ with tabs[1]:
                 "roasting": roasting,
                 "created_at": datetime.utcnow().isoformat()
             }
-            if DEMO_MODE:
-                st.success("Saved (demo mode).")
-                teas_df.loc[len(teas_df)] = tea_row
-            else:
-                try:
-                    SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
-                    st.success("Saved.")
-                except Exception as e:
-                    st.error(f"Failed to save: {e}")
+            try:
+                SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
+                st.success("Saved.")
+            except Exception as e:
+                st.error(f"Failed to save: {e}")
 
 # ---------- Tab 3: Browse ----------
 with tabs[2]:

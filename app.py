@@ -382,6 +382,8 @@ elif st.session_state.active_tab == "➕ Add Tea":
         supplier_sel = st.selectbox("Supplier", options=[""] + supplier_opts_all, index=0, key="add_tea_supplier_sel")
         supplier_new = st.text_input("Or add new Supplier", key="add_tea_supplier_new")
         url = st.text_input("URL", key="add_tea_url")
+        # Extra field: text area
+        processing_notes = st.text_area("Processing notes", key="add_tea_processing_notes")
     with colB:
         cultivar_sel = st.selectbox("Cultivar", options=[""] + cultivar_opts, index=0, key="add_tea_cultivar_sel")
         cultivar_new = st.text_input("Or add new Cultivar", key="add_tea_cultivar_new")
@@ -390,7 +392,11 @@ elif st.session_state.active_tab == "➕ Add Tea":
         pick_year_txt = st.text_input("Pick year", value="", key="add_tea_pick_year")
         oxidation = st.text_input("Oxidation", key="add_tea_oxidation")
         roasting = st.selectbox("Roasting", options=[""] + ROASTING_OPTIONS, index=0, key="add_tea_roasting")
+        # Extra fields: treat elevation as TEXT, picking season as TEXT
+        elevation_m_txt = st.text_input("Elevation (m)", value="", key="add_tea_elevation_m")
+        picking_season = st.text_input("Picking season", key="add_tea_picking_season")
 
+    # Resolve chosen vs new values (all optional)
     subtype = (subtype_new.strip() or subtype_sel.strip() or None)
     supplier = (supplier_new.strip() or supplier_sel.strip() or None)
     cultivar = (cultivar_new.strip() or cultivar_sel.strip() or None)
@@ -398,6 +404,11 @@ elif st.session_state.active_tab == "➕ Add Tea":
     pick_year = safe_int(pick_year_txt) if pick_year_txt else None
     roasting_val = roasting.strip() or None
     tea_type_val = tea_type.strip() or None
+
+    # Extra fields (as text)
+    elevation_m = (elevation_m_txt.strip() or None)
+    processing_notes_val = (processing_notes.strip() or None) if isinstance(processing_notes, str) else None
+    picking_season_val = (picking_season.strip() or None) if isinstance(picking_season, str) else None
 
     add_tea_btn = st.button("Save Tea", type="primary", use_container_width=True, key="add_tea_save")
     if add_tea_btn:
@@ -417,6 +428,10 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "pick_year": pick_year,
                 "oxidation": (oxidation.strip() or None),
                 "roasting": roasting_val,
+                # CSV fields (manual)
+                "processing_notes": processing_notes_val,
+                "elevation_m": elevation_m,  # TEXT
+                "picking_season": picking_season_val,
                 "created_at": datetime.utcnow().isoformat()
             }
             try:
@@ -461,12 +476,27 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                     subtype_new = st.text_input("Subtype", value=str(row.iloc[0].get("subtype", "") or ""))
                     supplier_new = st.text_input("Supplier", value=str(row.iloc[0].get("supplier", "") or ""))
                     url_new = st.text_input("URL", value=str(row.iloc[0].get("URL", "") or ""))
+                    processing_notes_new = st.text_area(
+                        "Processing notes",
+                        value=str(row.iloc[0].get("processing_notes", "") or ""),
+                        key="edit_tea_processing_notes"
+                    )
                 with colB:
                     cultivar_new = st.text_input("Cultivar", value=str(row.iloc[0].get("cultivar", "") or ""))
                     region_new = st.text_input("Region", value=str(row.iloc[0].get("region", "") or ""))
                     pick_year_new = st.text_input("Pick year", value=str(row.iloc[0].get("pick_year", "") or ""))
                     oxidation_new = st.text_input("Oxidation", value=str(row.iloc[0].get("oxidation", "") or ""))
                     roasting_new = st.selectbox("Roasting", options=roast_options, index=roast_idx, key="edit_tea_roasting")
+                    elevation_m_new = st.text_input(
+                        "Elevation (m)",
+                        value=str(row.iloc[0].get("elevation_m", "") or ""),
+                        key="edit_tea_elevation_m"
+                    )
+                    picking_season_new = st.text_input(
+                        "Picking season",
+                        value=str(row.iloc[0].get("picking_season", "") or ""),
+                        key="edit_tea_picking_season"
+                    )
 
                 save_btn = st.button("Save changes", type="primary", key="edit_tea_save")
                 if save_btn:
@@ -484,6 +514,10 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "pick_year": safe_int(pick_year_new),
                             "oxidation": (oxidation_new.strip() or None),
                             "roasting": (roasting_new.strip() or None),
+                            # CSV fields as TEXT
+                            "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
+                            "elevation_m": (elevation_m_new.strip() or None),
+                            "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
                         }
                         payload = {k: _json_sanitize(v) for k, v in payload.items()}
                         try:

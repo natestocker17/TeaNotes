@@ -394,7 +394,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
         roasting = st.selectbox("Roasting", options=[""] + ROASTING_OPTIONS, index=0, key="add_tea_roasting")
         elevation_m_txt = st.text_input("Elevation (m)", value="", key="add_tea_elevation_m")
         picking_season = st.text_input("Picking season", key="add_tea_picking_season")
-        # NEW: Buy_again dropdown (text)
+        # Buy_again dropdown (text)
         buy_again_sel = st.selectbox("Buy again", options=BUY_AGAIN_OPTIONS, index=0, key="add_tea_buy_again")
 
     # Resolve chosen vs new values (all optional)
@@ -478,40 +478,40 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 colA, colB = st.columns(2)
                 with colA:
                     name_new = st.text_input("Tea name", value=str(row.iloc[0].get("name", "") or ""))
-                    type_new = st.selectbox("Tea type", options=type_options, index=type_idx, key="edit_tea_type")
+                    type_new = st.selectbox("Tea type", options=type_options, index=type_idx, key=f"edit_tea_type_{tea_pk_val}")
                     subtype_new = st.text_input("Subtype", value=str(row.iloc[0].get("subtype", "") or ""))
                     supplier_new = st.text_input("Supplier", value=str(row.iloc[0].get("supplier", "") or ""))
                     url_new = st.text_input("URL", value=str(row.iloc[0].get("URL", "") or ""))
                     processing_notes_new = st.text_area(
                         "Processing notes",
                         value=str(row.iloc[0].get("processing_notes", "") or ""),
-                        key="edit_tea_processing_notes"
+                        key=f"edit_tea_processing_notes_{tea_pk_val}"
                     )
                 with colB:
                     cultivar_new = st.text_input("Cultivar", value=str(row.iloc[0].get("cultivar", "") or ""))
                     region_new = st.text_input("Region", value=str(row.iloc[0].get("region", "") or ""))
                     pick_year_new = st.text_input("Pick year", value=str(row.iloc[0].get("pick_year", "") or ""))
                     oxidation_new = st.text_input("Oxidation", value=str(row.iloc[0].get("oxidation", "") or ""))
-                    roasting_new = st.selectbox("Roasting", options=roast_options, index=roast_idx, key="edit_tea_roasting")
+                    roasting_new = st.selectbox("Roasting", options=roast_options, index=roast_idx, key=f"edit_tea_roasting_{tea_pk_val}")
                     elevation_m_new = st.text_input(
                         "Elevation (m)",
                         value=str(row.iloc[0].get("elevation_m", "") or ""),
-                        key="edit_tea_elevation_m"
+                        key=f"edit_tea_elevation_m_{tea_pk_val}"
                     )
                     picking_season_new = st.text_input(
                         "Picking season",
                         value=str(row.iloc[0].get("picking_season", "") or ""),
-                        key="edit_tea_picking_season"
+                        key=f"edit_tea_picking_season_{tea_pk_val}"
                     )
-                    # NEW: Buy_again dropdown
+                    # Buy_again dropdown (key depends on tea id to avoid sticky state)
                     buy_again_new_sel = st.selectbox(
                         "Buy again",
                         options=BUY_AGAIN_OPTIONS,
                         index=buy_again_idx,
-                        key=f"edit_tea_buy_again_{tea_pk_val}"   # <- unique per tea
+                        key=f"edit_tea_buy_again_{tea_pk_val}"
                     )
 
-                save_btn = st.button("Save changes", type="primary", key="edit_tea_save")
+                save_btn = st.button("Save changes", type="primary", key=f"edit_tea_save_{tea_pk_val}")
                 if save_btn:
                     if SUPABASE is None:
                         st.error("Database is not configured.")
@@ -531,7 +531,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
                             "elevation_m": (elevation_m_new.strip() or None),
                             "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
-                            "Buy_again": buy_again_to_save,  # NEW field (text)
+                            "Buy_again": buy_again_to_save,
                         }
                         payload = {k: _json_sanitize(v) for k, v in payload.items()}
                         try:
@@ -561,14 +561,40 @@ elif st.session_state.active_tab == "📜 Steep history":
     joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
     joined = joined.sort_values("session_at", ascending=False)
 
-    tea_names = (
-        teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
-    )
-    tea_names = tea_names[tea_names != ""].unique().tolist()
+    # ---- Recent steeps (reactive, no buttons) ----
+    st.markdown("### Recent steeps")
+    recent_left, recent_right = st.columns([1, 1])
+    with recent_left:
+        recent_n = st.selectbox("Show last N", options=[10, 20, 50, 100], index=1, key="recent_steeps_n")
+    with recent_right:
+        # Only enable this after a tea is chosen
+        # We still render a checkbox so layout doesn't jump
+        selected_tea_placeholder = "(select a tea)"
+        tea_names_for_sel = (
+            teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
+        )
+    tea_names = tea_names_for_sel[tea_names_for_sel != ""].unique().tolist() if not teas_df.empty else []
     tea_names_sorted = sorted(tea_names)
 
+    # Put the tea selector after "Recent steeps" controls, keeps the page feeling progressive
     selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
 
+    only_selected = False
+    if selected_tea != "(select a tea)":
+        only_selected = st.checkbox("Only show selected tea in recent steeps", value=False, key=f"recent_only_{selected_tea}")
+
+    recent_df = joined.copy()
+    if only_selected and selected_tea != "(select a tea)":
+        recent_df = recent_df[recent_df["name"] == selected_tea]
+    recent_cols = [c for c in ["session_at", "name", "rating", "tasting_notes", "steep_notes",
+                               "initial_steep_time_sec", "temperature_c", "amount_used_g",
+                               "supplier", "type"] if c in recent_df.columns]
+    st.dataframe(
+        recent_df.sort_values("session_at", ascending=False)[recent_cols].head(recent_n),
+        use_container_width=True
+    )
+
+    # ---- Detailed table for selected tea (editable) ----
     if selected_tea == "(select a tea)":
         st.info("Select a tea above to view and edit its steeps.")
     else:

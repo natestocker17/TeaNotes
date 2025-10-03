@@ -508,7 +508,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         "Buy again",
                         options=BUY_AGAIN_OPTIONS,
                         index=buy_again_idx,
-                        key="edit_tea_buy_again"
+                        key=f"edit_tea_buy_again_{tea_pk_val}"   # <- unique per tea
                     )
 
                 save_btn = st.button("Save changes", type="primary", key="edit_tea_save")

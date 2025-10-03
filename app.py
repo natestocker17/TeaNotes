@@ -56,6 +56,7 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
 ROASTING_OPTIONS = ["Unroasted", "Roasted", "Light", "Medium", "Heavy"]
+BUY_AGAIN_OPTIONS = ["Unstated", "Maybe", "No", "Yes", "Definitely"]
 
 @st.cache_resource
 def get_supabase() -> Optional["Client"]:
@@ -382,7 +383,6 @@ elif st.session_state.active_tab == "➕ Add Tea":
         supplier_sel = st.selectbox("Supplier", options=[""] + supplier_opts_all, index=0, key="add_tea_supplier_sel")
         supplier_new = st.text_input("Or add new Supplier", key="add_tea_supplier_new")
         url = st.text_input("URL", key="add_tea_url")
-        # Extra field: text area
         processing_notes = st.text_area("Processing notes", key="add_tea_processing_notes")
     with colB:
         cultivar_sel = st.selectbox("Cultivar", options=[""] + cultivar_opts, index=0, key="add_tea_cultivar_sel")
@@ -392,9 +392,10 @@ elif st.session_state.active_tab == "➕ Add Tea":
         pick_year_txt = st.text_input("Pick year", value="", key="add_tea_pick_year")
         oxidation = st.text_input("Oxidation", key="add_tea_oxidation")
         roasting = st.selectbox("Roasting", options=[""] + ROASTING_OPTIONS, index=0, key="add_tea_roasting")
-        # Extra fields: treat elevation as TEXT, picking season as TEXT
         elevation_m_txt = st.text_input("Elevation (m)", value="", key="add_tea_elevation_m")
         picking_season = st.text_input("Picking season", key="add_tea_picking_season")
+        # NEW: Buy_again dropdown (text)
+        buy_again_sel = st.selectbox("Buy again", options=BUY_AGAIN_OPTIONS, index=0, key="add_tea_buy_again")
 
     # Resolve chosen vs new values (all optional)
     subtype = (subtype_new.strip() or subtype_sel.strip() or None)
@@ -409,6 +410,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
     elevation_m = (elevation_m_txt.strip() or None)
     processing_notes_val = (processing_notes.strip() or None) if isinstance(processing_notes, str) else None
     picking_season_val = (picking_season.strip() or None) if isinstance(picking_season, str) else None
+    buy_again_val = None if buy_again_sel == "Unstated" else buy_again_sel
 
     add_tea_btn = st.button("Save Tea", type="primary", use_container_width=True, key="add_tea_save")
     if add_tea_btn:
@@ -428,10 +430,10 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "pick_year": pick_year,
                 "oxidation": (oxidation.strip() or None),
                 "roasting": roasting_val,
-                # CSV fields (manual)
                 "processing_notes": processing_notes_val,
                 "elevation_m": elevation_m,  # TEXT
                 "picking_season": picking_season_val,
+                "Buy_again": buy_again_val,  # NEW field (text)
                 "created_at": datetime.utcnow().isoformat()
             }
             try:
@@ -469,6 +471,10 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
                 roast_idx = safe_index(roast_options, row.iloc[0].get("roasting", ""))
 
+                # Current Buy_again value mapped to dropdown
+                current_buy_again = row.iloc[0].get("Buy_again", None)
+                buy_again_idx = safe_index(BUY_AGAIN_OPTIONS, current_buy_again, default=0)
+
                 colA, colB = st.columns(2)
                 with colA:
                     name_new = st.text_input("Tea name", value=str(row.iloc[0].get("name", "") or ""))
@@ -497,12 +503,20 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         value=str(row.iloc[0].get("picking_season", "") or ""),
                         key="edit_tea_picking_season"
                     )
+                    # NEW: Buy_again dropdown
+                    buy_again_new_sel = st.selectbox(
+                        "Buy again",
+                        options=BUY_AGAIN_OPTIONS,
+                        index=buy_again_idx,
+                        key="edit_tea_buy_again"
+                    )
 
                 save_btn = st.button("Save changes", type="primary", key="edit_tea_save")
                 if save_btn:
                     if SUPABASE is None:
                         st.error("Database is not configured.")
                     else:
+                        buy_again_to_save = None if buy_again_new_sel == "Unstated" else buy_again_new_sel
                         payload = {
                             "name": name_new.strip() or None,
                             "type": (type_new.strip() or None),
@@ -514,10 +528,10 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "pick_year": safe_int(pick_year_new),
                             "oxidation": (oxidation_new.strip() or None),
                             "roasting": (roasting_new.strip() or None),
-                            # CSV fields as TEXT
                             "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
                             "elevation_m": (elevation_m_new.strip() or None),
                             "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
+                            "Buy_again": buy_again_to_save,  # NEW field (text)
                         }
                         payload = {k: _json_sanitize(v) for k, v in payload.items()}
                         try:

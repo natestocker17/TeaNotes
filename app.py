@@ -1,3 +1,7 @@
+# =========================
+# Tea Notes (Steeps) — full app with early raw JSON/CSV endpoint
+# =========================
+
 import json
 import os
 from datetime import datetime
@@ -6,14 +10,20 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 import numpy as np
 import streamlit as st
-import sys
 import plotly.express as px
 from streamlit import column_config  # optional, for nicer column configs
 
-# -------------------- Early query params (works on old/new Streamlit) --------------------
+# -------------------- Supabase availability --------------------
+try:
+    from supabase import create_client, Client  # type: ignore
+    SUPABASE_AVAILABLE = True
+except Exception:
+    SUPABASE_AVAILABLE = False
 
+
+# -------------------- Helpers: query params + DB --------------------
 def _get_query_params() -> Dict[str, str]:
-    """Return query params as a flat dict[str, str]."""
+    """Return query params as a flat dict[str, str], working on old/new Streamlit."""
     try:
         # New API (1.33+)
         qp = st.query_params
@@ -23,66 +33,17 @@ def _get_query_params() -> Dict[str, str]:
         qp = st.experimental_get_query_params()
         return {k: (v[0] if isinstance(v, list) and v else v) for k, v in qp.items()}
 
-# -------------------- Page config --------------------
-st.set_page_config(page_title="Tea Notes (Steeps)", page_icon="🍵", layout="wide")
-
-# -------------------- CSS --------------------
-st.markdown(
-    """
-<style>
-/* Radio looks like tabs */
-[data-testid="stHorizontalBlock"] > div:has(> div[data-testid="stRadio"]) { margin-bottom: 0.5rem; }
-div[data-testid="stRadio"] > div[role="radiogroup"] {
-  display: flex; gap: .25rem; flex-wrap: wrap;
-}
-div[data-testid="stRadio"] label {
-  border: 1px solid var(--secondary-background-color);
-  padding: .4rem .8rem; border-radius: .5rem .5rem 0 0;
-  background: var(--secondary-background-color); cursor: pointer;
-  font-weight: 500;
-}
-div[data-testid="stRadio"] label[data-checked="true"] {
-  background: var(--background-color);
-  border-bottom-color: var(--background-color);
-  box-shadow: 0 -2px 0 0 var(--primary-color) inset;
-}
-
-/* Wrap text in grid cells (dataframe / data editor) */
-[data-testid="stDataFrame"] div[role="gridcell"],
-[data-testid="stDataFrame"] div[data-testid="cell-container"],
-[data-testid="stDataFrame"] td, 
-[data-testid="stDataFrame"] span, 
-[data-testid="stDataFrame"] p {
-  white-space: normal !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-st.title("🍵 Tea Notes — Sessions & Scores")
-
-# -------------------- Config & Data Access --------------------
-
-TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
-ROASTING_OPTIONS = ["Unroasted", "Roasted", "Light", "Medium", "Heavy"]
-BUY_AGAIN_OPTIONS = ["Unstated", "Maybe", "No", "Yes", "Definitely"]
-
-# Optional Supabase
-try:
-    from supabase import create_client, Client  # type: ignore
-    SUPABASE_AVAILABLE = True
-except Exception:
-    SUPABASE_AVAILABLE = False
 
 @st.cache_resource
 def get_supabase() -> Optional["Client"]:
     if not SUPABASE_AVAILABLE:
         return None
     url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    key = (
+        st.secrets.get("SUPABASE_KEY")
+        or os.getenv("SUPABASE_KEY")
+        or os.getenv("SUPABASE_ANON_KEY")
+    )
     if not url or not key:
         return None
     try:
@@ -90,17 +51,16 @@ def get_supabase() -> Optional["Client"]:
     except Exception:
         return None
 
-SUPABASE = get_supabase()
 
 @st.cache_data(ttl=60)
 def load_data() -> Dict[str, pd.DataFrame]:
+    """Load teas and steeps from Supabase and normalize Buy_again/buy_again in-memory."""
     if SUPABASE is None:
         return {"teas": pd.DataFrame(), "steeps": pd.DataFrame()}
     teas = pd.DataFrame(SUPABASE.table("teas").select("*").execute().data)  # type: ignore
     steeps = pd.DataFrame(SUPABASE.table("steeps").select("*").execute().data)  # type: ignore
 
-    # --- Normalize Buy_again casing/alias for compatibility ---
-    # Prefer lowercase `buy_again` as canonical; keep `Buy_again` mirror in-memory
+    # Normalize Buy_again casing/alias for compatibility
     if "buy_again" not in teas.columns and "Buy_again" in teas.columns:
         teas["buy_again"] = teas["Buy_again"]
     if "Buy_again" not in teas.columns and "buy_again" in teas.columns:
@@ -108,12 +68,187 @@ def load_data() -> Dict[str, pd.DataFrame]:
 
     return {"teas": teas, "steeps": steeps}
 
+
+def ensure_datetime(col: pd.Series) -> pd.Series:
+    try:
+        return pd.to_datetime(col, errors="coerce")
+    except Exception:
+        return pd.to_datetime(pd.Series([None] * len(col)))
+
+
+def options_from_column(df: pd.DataFrame, col: str) -> List[str]:
+    if col not in df.columns:
+        return []
+    vals = df[col].dropna().astype(str).str.strip()
+    vals = vals[vals != ""]
+    return sorted(vals.unique().tolist())
+
+
+def safe_int(text: str) -> Optional[int]:
+    text = (text or "").strip()
+    if text == "":
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
+
+
+def safe_float(text: str) -> Optional[float]:
+    text = (text or "").strip()
+    if text == "":
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def safe_index(options: List[str], value: Any, default: int = 0) -> int:
+    """Return a valid index for Streamlit selectbox; fall back to default if missing."""
+    if value is None:
+        return default
+    try:
+        v = str(value).strip()
+    except Exception:
+        return default
+    return options.index(v) if v in options else default
+
+
+def get_pk_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _json_sanitize(value: Any) -> Any:
+    """Convert pandas/NumPy NaN/NaT to None and NumPy scalars to Python scalars for JSON."""
+    if value is None:
+        return None
+    if isinstance(value, (pd.Timestamp,)):
+        if pd.isna(value):
+            return None
+        try:
+            return pd.to_datetime(value, utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return str(value)
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def update_supabase_rows(table: str, pk_col: str, rows: List[Dict[str, Any]]) -> List[str]:
+    """Update rows by primary key; returns a list of error messages (empty if success)."""
+    errs = []
+    if SUPABASE is None:
+        return ["Database is not configured."]
+    for r in rows:
+        pk_val = r.get(pk_col)
+        if pk_val is None or (isinstance(pk_val, float) and np.isnan(pk_val)):
+            errs.append(f"Missing {pk_col} in row; skipped.")
+            continue
+        payload = {k: _json_sanitize(v) for k, v in r.items() if k != pk_col}
+        try:
+            SUPABASE.table(table).update(payload).eq(pk_col, pk_val).execute()  # type: ignore
+        except Exception as e:
+            errs.append(f"{table} update failed for {pk_col}={pk_val}: {e}")
+    return errs
+
+
+def diff_rows(original: pd.DataFrame, edited: pd.DataFrame, pk_col: str, editable_cols: List[str]) -> pd.DataFrame:
+    """Return only rows from 'edited' that changed compared to 'original' for the given cols."""
+    if original.empty or edited.empty:
+        return edited.iloc[0:0].copy()
+    left = original.set_index(pk_col)
+    right = edited.set_index(pk_col)
+    cols = [c for c in editable_cols if c in left.columns and c in right.columns]
+    if not cols:
+        return edited.iloc[0:0].copy()
+    l = left[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
+    r = right[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
+    changed_mask = (l != r).any(axis=1)
+    changed_idx = changed_mask[changed_mask].index
+    return edited[edited[pk_col].isin(changed_idx)].copy()
+
+
+# --- types for steeps & payload builder ---
+INT_COLS_STEEP = ["initial_steep_time_sec", "temperature_c"]
+FLOAT_COLS_STEEP = ["rating", "amount_used_g"]
+
+
+def _to_iso_utc_or_none(value):
+    if value is None or (isinstance(value, str) and value.strip() == "") or (isinstance(value, float) and np.isnan(value)):
+        return None
+    ts = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(ts):
+        return None
+    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str, Any]]:
+    """Coerce edited values to JSON-safe, DB-correct types."""
+    payloads: List[Dict[str, Any]] = []
+    for _, r in changed_df.iterrows():
+        rec: Dict[str, Any] = {pk_col: r[pk_col]}
+        cols = [
+            "session_at",
+            "rating",
+            "tasting_notes",
+            "steep_notes",
+            "initial_steep_time_sec",
+            "steep_time_changes",
+            "temperature_c",
+            "amount_used_g",
+        ]
+        for c in cols:
+            if c not in changed_df.columns:
+                continue
+            v = r[c]
+
+            if c == "session_at":
+                val = _to_iso_utc_or_none(v)
+
+            elif c in INT_COLS_STEEP:
+                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
+                    val = None
+                else:
+                    try:
+                        val = int(round(float(v)))
+                    except Exception:
+                        val = None
+
+            elif c in FLOAT_COLS_STEEP:
+                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
+                    val = None
+                else:
+                    try:
+                        val = float(v)
+                    except Exception:
+                        val = None
+
+            else:
+                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
+                    val = None
+                else:
+                    val = v
+
+            rec[c] = val
+
+        payloads.append(rec)
+    return payloads
+
+
+# -------------------- Supabase + data (for raw and UI) --------------------
+SUPABASE = get_supabase()
 _db = load_data()
 teas_df = _db["teas"].copy()
 steeps_df = _db["steeps"].copy()
 
-# -------------------- Lightweight JSON/CSV endpoint --------------------
-# Handle BEFORE heavy UI by short-circuiting when ?raw=...
+
+# -------------------- EARLY RAW JSON/CSV ENDPOINT (must run before any UI) --------------------
 params = _get_query_params()
 if params.get("raw") is not None:
     mode = (params.get("raw") or "steeps").lower()
@@ -148,15 +283,14 @@ if params.get("raw") is not None:
     start_param = params.get("from")
     end_param = params.get("to")
     limit_param = params.get("limit")
-    order_param = params.get("order", "desc").lower()
+    order_param = (params.get("order") or "desc").lower()
 
-    df_out: pd.DataFrame
     if mode in ("steeps", "steeps_with_tea"):
         df_out = joined
     elif mode == "teas":
         df_out = teas_df
     else:
-        st.error("Unknown ?raw parameter. Use ?raw=steeps or ?raw=teas.")
+        st.write({"error": "Unknown ?raw parameter. Use ?raw=steeps or ?raw=teas."})
         st.stop()
 
     # Coerce session_at for filtering/sorting
@@ -218,51 +352,58 @@ if params.get("raw") is not None:
         recs = json.loads(df_out.to_json(orient="records"))
         st.write("\n".join(json.dumps(r, ensure_ascii=False) for r in recs))
     else:
-        st.json(json.loads(df_out.to_json(orient="records")))
+        st.write(json.loads(df_out.to_json(orient="records")))
     st.stop()
 
-# -------------------- Helpers --------------------
 
-def ensure_datetime(col: pd.Series) -> pd.Series:
-    try:
-        return pd.to_datetime(col, errors="coerce")
-    except Exception:
-        return pd.to_datetime(pd.Series([None] * len(col)))
+# ========================= UI SECTION =========================
 
-def options_from_column(df: pd.DataFrame, col: str) -> List[str]:
-    if col not in df.columns:
-        return []
-    vals = df[col].dropna().astype(str).str.strip()
-    vals = vals[vals != ""]
-    return sorted(vals.unique().tolist())
+# -------------------- Page config --------------------
+st.set_page_config(page_title="Tea Notes (Steeps)", page_icon="🍵", layout="wide")
 
-def safe_int(text: str) -> Optional[int]:
-    text = (text or "").strip()
-    if text == "":
-        return None
-    try:
-        return int(float(text))
-    except Exception:
-        return None
+# -------------------- CSS --------------------
+st.markdown(
+    """
+<style>
+/* Radio looks like tabs */
+[data-testid="stHorizontalBlock"] > div:has(> div[data-testid="stRadio"]) { margin-bottom: 0.5rem; }
+div[data-testid="stRadio"] > div[role="radiogroup"] {
+  display: flex; gap: .25rem; flex-wrap: wrap;
+}
+div[data-testid="stRadio"] label {
+  border: 1px solid var(--secondary-background-color);
+  padding: .4rem .8rem; border-radius: .5rem .5rem 0 0;
+  background: var(--secondary-background-color); cursor: pointer;
+  font-weight: 500;
+}
+div[data-testid="stRadio"] label[data-checked="true"] {
+  background: var(--background-color);
+  border-bottom-color: var(--background-color);
+  box-shadow: 0 -2px 0 0 var(--primary-color) inset;
+}
 
-def safe_float(text: str) -> Optional[float]:
-    text = (text or "").strip()
-    if text == "":
-        return None
-    try:
-        return float(text)
-    except Exception:
-        return None
+/* Wrap text in grid cells (dataframe / data editor) */
+[data-testid="stDataFrame"] div[role="gridcell"],
+[data-testid="stDataFrame"] div[data-testid="cell-container"],
+[data-testid="stDataFrame"] td, 
+[data-testid="stDataFrame"] span, 
+[data-testid="stDataFrame"] p {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
-def safe_index(options: List[str], value: Any, default: int = 0) -> int:
-    """Return a valid index for Streamlit selectbox; fall back to default if missing."""
-    if value is None:
-        return default
-    try:
-        v = str(value).strip()
-    except Exception:
-        return default
-    return options.index(v) if v in options else default
+st.title("🍵 Tea Notes — Sessions & Scores")
+
+# -------------------- Config for UI --------------------
+TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
+ROASTING_OPTIONS = ["Unroasted", "Roasted", "Light", "Medium", "Heavy"]
+BUY_AGAIN_OPTIONS = ["Unstated", "Maybe", "No", "Yes", "Definitely"]
+
 
 def plot_sessions_with_average(df: pd.DataFrame, title: str = "Session ratings"):
     if df.empty or "rating" not in df.columns:
@@ -293,6 +434,7 @@ def plot_sessions_with_average(df: pd.DataFrame, title: str = "Session ratings")
     fig.update_xaxes(title_text="Session time")
     fig.update_yaxes(title_text="Rating (0–100)")
     st.plotly_chart(fig, use_container_width=True)
+
 
 def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
     """Box & whisker: Y=rating, X=tea name, show individual points."""
@@ -327,126 +469,8 @@ def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
     fig.update_yaxes(range=[0, 5])
     st.plotly_chart(fig, use_container_width=True)
 
-def get_pk_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
 
-def _json_sanitize(value: Any) -> Any:
-    """Convert pandas/NumPy NaN/NaT to None and NumPy scalars to Python scalars for JSON."""
-    if value is None:
-        return None
-    if isinstance(value, (pd.Timestamp,)):
-        if pd.isna(value):
-            return None
-        try:
-            return pd.to_datetime(value, utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception:
-            return str(value)
-    if isinstance(value, float) and np.isnan(value):
-        return None
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
-
-def update_supabase_rows(table: str, pk_col: str, rows: List[Dict[str, Any]]) -> List[str]:
-    """Update rows by primary key; returns a list of error messages (empty if success)."""
-    errs = []
-    if SUPABASE is None:
-        return ["Database is not configured."]
-    for r in rows:
-        pk_val = r.get(pk_col)
-        if pk_val is None or (isinstance(pk_val, float) and np.isnan(pk_val)):
-            errs.append(f"Missing {pk_col} in row; skipped.")
-            continue
-        payload = {k: _json_sanitize(v) for k, v in r.items() if k != pk_col}
-        try:
-            SUPABASE.table(table).update(payload).eq(pk_col, pk_val).execute()  # type: ignore
-        except Exception as e:
-            errs.append(f"{table} update failed for {pk_col}={pk_val}: {e}")
-    return errs
-
-def diff_rows(original: pd.DataFrame, edited: pd.DataFrame, pk_col: str, editable_cols: List[str]) -> pd.DataFrame:
-    """Return only rows from 'edited' that changed compared to 'original' for the given cols."""
-    if original.empty or edited.empty:
-        return edited.iloc[0:0].copy()
-    left = original.set_index(pk_col)
-    right = edited.set_index(pk_col)
-    cols = [c for c in editable_cols if c in left.columns and c in right.columns]
-    if not cols:
-        return edited.iloc[0:0].copy()
-    l = left[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
-    r = right[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
-    changed_mask = (l != r).any(axis=1)
-    changed_idx = changed_mask[changed_mask].index
-    return edited[edited[pk_col].isin(changed_idx)].copy()
-
-# --- types for steeps & payload builder ---
-INT_COLS_STEEP = ["initial_steep_time_sec", "temperature_c"]
-FLOAT_COLS_STEEP = ["rating", "amount_used_g"]
-
-def _to_iso_utc_or_none(value):
-    if value is None or (isinstance(value, str) and value.strip() == "") or (isinstance(value, float) and np.isnan(value)):
-        return None
-    ts = pd.to_datetime(value, errors="coerce", utc=True)
-    if pd.isna(ts):
-        return None
-    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str, Any]]:
-    """Coerce edited values to JSON-safe, DB-correct types."""
-    payloads: List[Dict[str, Any]] = []
-    for _, r in changed_df.iterrows():
-        rec: Dict[str, Any] = {pk_col: r[pk_col]}
-        cols = [
-            "session_at",
-            "rating",
-            "tasting_notes",
-            "steep_notes",
-            "initial_steep_time_sec",
-            "steep_time_changes",
-            "temperature_c",
-            "amount_used_g",
-        ]
-        for c in cols:
-            if c not in changed_df.columns:
-                continue
-            v = r[c]
-
-            if c == "session_at":
-                val = _to_iso_utc_or_none(v)
-
-            elif c in INT_COLS_STEEP:
-                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
-                    val = None
-                else:
-                    try:
-                        val = int(round(float(v)))
-                    except Exception:
-                        val = None
-
-            elif c in FLOAT_COLS_STEEP:
-                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
-                    val = None
-                else:
-                    try:
-                        val = float(v)
-                    except Exception:
-                        val = None
-
-            else:
-                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
-                    val = None
-                else:
-                    val = v
-
-            rec[c] = val
-
-        payloads.append(rec)
-    return payloads
-
-# -------------------- Sticky tab-like nav --------------------
+# -------------------- Nav --------------------
 NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history", "📊 Analysis"]
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = NAV_ITEMS[0]
@@ -461,7 +485,6 @@ st.session_state.active_tab = st.radio(
 )
 
 # -------------------- Screens --------------------
-
 if st.session_state.active_tab == "📝 Add Session":
     # ---------- Add Session ----------
     tea_choices = ["(select)"] + teas_df.get("name", pd.Series(dtype=str)).fillna("(unnamed)").tolist()
@@ -720,7 +743,6 @@ elif st.session_state.active_tab == "📜 Steep history":
     with recent_left:
         recent_n = st.selectbox("Show last N", options=[10, 20, 50, 100], index=1, key="recent_steeps_n")
     with recent_right:
-        # Only enable this after a tea is chosen
         tea_names_for_sel = (
             teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
         )

@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 import numpy as np
 import streamlit as st
+import sys
 import plotly.express as px
 from streamlit import column_config  # optional, for nicer column configs
 
@@ -84,6 +85,28 @@ def load_data() -> Dict[str, pd.DataFrame]:
 db = load_data()
 teas_df = db["teas"].copy()
 steeps_df = db["steeps"].copy()
+
+# -------------------- Optional JSON API endpoint --------------------
+# If URL includes ?raw=1 or ?raw=steeps, return JSON and stop execution
+params = st.query_params
+if "raw" in params:
+    mode = params["raw"].lower() if isinstance(params["raw"], str) else "steeps"
+    st.set_page_config(page_title="Tea Notes API", layout="wide")
+    st.write("🫖 **Tea Notes JSON Feed** — live data from Supabase")
+
+    if mode in ("steeps", "steeps_with_tea"):
+        # join teas + steeps (like your view)
+        teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
+        joined = steeps_df.merge(
+            teas_df.rename(columns={teas_key: "tea_id"})[["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]],
+            on="tea_id", how="left"
+        )
+        st.json(joined.to_dict(orient="records"))
+    elif mode == "teas":
+        st.json(teas_df.to_dict(orient="records"))
+    else:
+        st.error("Unknown ?raw parameter. Use ?raw=steeps or ?raw=teas.")
+    st.stop()
 
 # -------------------- Helpers --------------------
 

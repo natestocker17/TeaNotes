@@ -10,18 +10,25 @@ import sys
 import plotly.express as px
 from streamlit import column_config  # optional, for nicer column configs
 
-# Optional Supabase
-try:
-    from supabase import create_client, Client  # type: ignore
-    SUPABASE_AVAILABLE = True
-except Exception:
-    SUPABASE_AVAILABLE = False
+# -------------------- Early query params (works on old/new Streamlit) --------------------
 
+def _get_query_params() -> Dict[str, str]:
+    """Return query params as a flat dict[str, str]."""
+    try:
+        # New API (1.33+)
+        qp = st.query_params
+        return {k: v for k, v in qp.items()}
+    except Exception:
+        # Older API
+        qp = st.experimental_get_query_params()
+        return {k: (v[0] if isinstance(v, list) and v else v) for k, v in qp.items()}
+
+# -------------------- Page config --------------------
 st.set_page_config(page_title="Tea Notes (Steeps)", page_icon="🍵", layout="wide")
-st.title("🍵 Tea Notes — Sessions & Scores")
 
 # -------------------- CSS --------------------
-st.markdown("""
+st.markdown(
+    """
 <style>
 /* Radio looks like tabs */
 [data-testid="stHorizontalBlock"] > div:has(> div[data-testid="stRadio"]) { margin-bottom: 0.5rem; }
@@ -51,7 +58,11 @@ div[data-testid="stRadio"] label[data-checked="true"] {
   text-overflow: clip !important;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
+
+st.title("🍵 Tea Notes — Sessions & Scores")
 
 # -------------------- Config & Data Access --------------------
 
@@ -59,12 +70,19 @@ TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
 ROASTING_OPTIONS = ["Unroasted", "Roasted", "Light", "Medium", "Heavy"]
 BUY_AGAIN_OPTIONS = ["Unstated", "Maybe", "No", "Yes", "Definitely"]
 
+# Optional Supabase
+try:
+    from supabase import create_client, Client  # type: ignore
+    SUPABASE_AVAILABLE = True
+except Exception:
+    SUPABASE_AVAILABLE = False
+
 @st.cache_resource
 def get_supabase() -> Optional["Client"]:
     if not SUPABASE_AVAILABLE:
         return None
     url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
+    key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_ANON_KEY")
     if not url or not key:
         return None
     try:
@@ -80,32 +98,127 @@ def load_data() -> Dict[str, pd.DataFrame]:
         return {"teas": pd.DataFrame(), "steeps": pd.DataFrame()}
     teas = pd.DataFrame(SUPABASE.table("teas").select("*").execute().data)  # type: ignore
     steeps = pd.DataFrame(SUPABASE.table("steeps").select("*").execute().data)  # type: ignore
+
+    # --- Normalize Buy_again casing/alias for compatibility ---
+    # Prefer lowercase `buy_again` as canonical; keep `Buy_again` mirror in-memory
+    if "buy_again" not in teas.columns and "Buy_again" in teas.columns:
+        teas["buy_again"] = teas["Buy_again"]
+    if "Buy_again" not in teas.columns and "buy_again" in teas.columns:
+        teas["Buy_again"] = teas["buy_again"]
+
     return {"teas": teas, "steeps": steeps}
 
-db = load_data()
-teas_df = db["teas"].copy()
-steeps_df = db["steeps"].copy()
+_db = load_data()
+teas_df = _db["teas"].copy()
+steeps_df = _db["steeps"].copy()
 
-# -------------------- Optional JSON API endpoint --------------------
-# If URL includes ?raw=1 or ?raw=steeps, return JSON and stop execution
-params = st.query_params
-if "raw" in params:
-    mode = params["raw"].lower() if isinstance(params["raw"], str) else "steeps"
-    st.set_page_config(page_title="Tea Notes API", layout="wide")
-    st.write("🫖 **Tea Notes JSON Feed** — live data from Supabase")
+# -------------------- Lightweight JSON/CSV endpoint --------------------
+# Handle BEFORE heavy UI by short-circuiting when ?raw=...
+params = _get_query_params()
+if params.get("raw") is not None:
+    mode = (params.get("raw") or "steeps").lower()
 
-    if mode in ("steeps", "steeps_with_tea"):
-        # join teas + steeps (like your view)
+    # Build join similar to view
+    if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
         joined = steeps_df.merge(
-            teas_df.rename(columns={teas_key: "tea_id"})[["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]],
-            on="tea_id", how="left"
+            teas_df.rename(columns={teas_key: "tea_id"})[
+                [
+                    "tea_id",
+                    "name",
+                    "type",
+                    "supplier",
+                    "region",
+                    "cultivar",
+                    "roasting",
+                    "buy_again",
+                ]
+            ],
+            on="tea_id",
+            how="left",
         )
-        st.json(joined.to_dict(orient="records"))
+    else:
+        joined = steeps_df.copy()
+
+    # Optional filters
+    tea_name_param = params.get("tea_name")
+    tea_id_param = params.get("tea_id")
+    type_param = params.get("type")
+    q_param = params.get("q")  # search tasting/steep notes
+    start_param = params.get("from")
+    end_param = params.get("to")
+    limit_param = params.get("limit")
+    order_param = params.get("order", "desc").lower()
+
+    df_out: pd.DataFrame
+    if mode in ("steeps", "steeps_with_tea"):
+        df_out = joined
     elif mode == "teas":
-        st.json(teas_df.to_dict(orient="records"))
+        df_out = teas_df
     else:
         st.error("Unknown ?raw parameter. Use ?raw=steeps or ?raw=teas.")
+        st.stop()
+
+    # Coerce session_at for filtering/sorting
+    if "session_at" in df_out.columns:
+        df_out["session_at"] = pd.to_datetime(df_out["session_at"], errors="coerce", utc=True)
+
+    # Apply filters (case-insensitive where sensible)
+    if tea_name_param and "name" in df_out.columns:
+        df_out = df_out[df_out["name"].astype(str).str.contains(tea_name_param, case=False, na=False)]
+    if tea_id_param and "tea_id" in df_out.columns:
+        try:
+            df_out = df_out[df_out["tea_id"].astype(str) == str(tea_id_param)]
+        except Exception:
+            pass
+    if type_param and "type" in df_out.columns:
+        df_out = df_out[df_out["type"].astype(str).str.lower() == str(type_param).lower()]
+    if q_param:
+        # search across text cols
+        for c in ["tasting_notes", "steep_notes"]:
+            if c not in df_out.columns:
+                df_out[c] = None
+        mask = (
+            df_out["tasting_notes"].astype(str).str.contains(q_param, case=False, na=False)
+            | df_out["steep_notes"].astype(str).str.contains(q_param, case=False, na=False)
+        )
+        df_out = df_out[mask]
+    if start_param and "session_at" in df_out.columns:
+        try:
+            start_ts = pd.to_datetime(start_param, utc=True)
+            df_out = df_out[df_out["session_at"] >= start_ts]
+        except Exception:
+            pass
+    if end_param and "session_at" in df_out.columns:
+        try:
+            end_ts = pd.to_datetime(end_param, utc=True)
+            df_out = df_out[df_out["session_at"] < end_ts]
+        except Exception:
+            pass
+
+    # Sort newest first if session_at exists
+    if "session_at" in df_out.columns:
+        df_out = df_out.sort_values("session_at", ascending=(order_param == "asc"))
+
+    # Apply limit
+    if limit_param:
+        try:
+            n = int(limit_param)
+            if n > 0:
+                df_out = df_out.head(n)
+        except Exception:
+            pass
+
+    # Output format
+    fmt = (params.get("fmt") or "json").lower()
+    if fmt == "csv":
+        st.write(df_out.to_csv(index=False))
+    elif fmt in ("ndjson", "jsonl"):
+        # One JSON object per line
+        recs = json.loads(df_out.to_json(orient="records"))
+        st.write("\n".join(json.dumps(r, ensure_ascii=False) for r in recs))
+    else:
+        st.json(json.loads(df_out.to_json(orient="records")))
     st.stop()
 
 # -------------------- Helpers --------------------
@@ -114,7 +227,7 @@ def ensure_datetime(col: pd.Series) -> pd.Series:
     try:
         return pd.to_datetime(col, errors="coerce")
     except Exception:
-        return pd.to_datetime(pd.Series([None]*len(col)))
+        return pd.to_datetime(pd.Series([None] * len(col)))
 
 def options_from_column(df: pd.DataFrame, col: str) -> List[str]:
     if col not in df.columns:
@@ -168,14 +281,14 @@ def plot_sessions_with_average(df: pd.DataFrame, title: str = "Session ratings")
         y="rating",
         color="name",
         markers=True,
-        title=title
+        title=title,
     )
     fig.update_traces(mode="lines+markers", hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Rating %{y}<extra></extra>")
     fig.add_hline(y=avg, line_dash="dash", annotation_text=f"Average: {avg:.1f}", annotation_position="top left", opacity=0.7)
     fig.update_layout(
         margin=dict(l=12, r=12, t=48, b=12),
         legend=dict(title="Tea", orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hovermode="x unified"
+        hovermode="x unified",
     )
     fig.update_xaxes(title_text="Session time")
     fig.update_yaxes(title_text="Rating (0–100)")
@@ -191,7 +304,7 @@ def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
     for col in ["supplier", "type", "session_at", "tasting_notes", "steep_notes"]:
         if col not in working.columns:
             working[col] = None
-    working = working.dropna(subset=["rating"])
+    working = working.dropna(subset=["rating"]) if not working.empty else working
     if working.empty:
         st.info("No ratings to chart yet.")
         return
@@ -224,14 +337,14 @@ def _json_sanitize(value: Any) -> Any:
     """Convert pandas/NumPy NaN/NaT to None and NumPy scalars to Python scalars for JSON."""
     if value is None:
         return None
-    if isinstance(value, (pd.Timestamp, )):
+    if isinstance(value, (pd.Timestamp,)):
         if pd.isna(value):
             return None
         try:
             return pd.to_datetime(value, utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
         except Exception:
             return str(value)
-    if pd.isna(value):
+    if isinstance(value, float) and np.isnan(value):
         return None
     if isinstance(value, np.generic):
         return value.item()
@@ -263,8 +376,8 @@ def diff_rows(original: pd.DataFrame, edited: pd.DataFrame, pk_col: str, editabl
     cols = [c for c in editable_cols if c in left.columns and c in right.columns]
     if not cols:
         return edited.iloc[0:0].copy()
-    l = left[cols].applymap(lambda x: None if pd.isna(x) else x)
-    r = right[cols].applymap(lambda x: None if pd.isna(x) else x)
+    l = left[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
+    r = right[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
     changed_mask = (l != r).any(axis=1)
     changed_idx = changed_mask[changed_mask].index
     return edited[edited[pk_col].isin(changed_idx)].copy()
@@ -274,7 +387,7 @@ INT_COLS_STEEP = ["initial_steep_time_sec", "temperature_c"]
 FLOAT_COLS_STEEP = ["rating", "amount_used_g"]
 
 def _to_iso_utc_or_none(value):
-    if value is None or (isinstance(value, str) and value.strip() == "") or pd.isna(value):
+    if value is None or (isinstance(value, str) and value.strip() == "") or (isinstance(value, float) and np.isnan(value)):
         return None
     ts = pd.to_datetime(value, errors="coerce", utc=True)
     if pd.isna(ts):
@@ -287,10 +400,14 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
     for _, r in changed_df.iterrows():
         rec: Dict[str, Any] = {pk_col: r[pk_col]}
         cols = [
-            "session_at", "rating",
-            "tasting_notes", "steep_notes",
-            "initial_steep_time_sec", "steep_time_changes",
-            "temperature_c", "amount_used_g",
+            "session_at",
+            "rating",
+            "tasting_notes",
+            "steep_notes",
+            "initial_steep_time_sec",
+            "steep_time_changes",
+            "temperature_c",
+            "amount_used_g",
         ]
         for c in cols:
             if c not in changed_df.columns:
@@ -301,7 +418,7 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
                 val = _to_iso_utc_or_none(v)
 
             elif c in INT_COLS_STEEP:
-                if v is None or (isinstance(v, str) and v.strip() == "") or pd.isna(v):
+                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
                     val = None
                 else:
                     try:
@@ -310,7 +427,7 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
                         val = None
 
             elif c in FLOAT_COLS_STEEP:
-                if v is None or (isinstance(v, str) and v.strip() == "") or pd.isna(v):
+                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
                     val = None
                 else:
                     try:
@@ -319,7 +436,7 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
                         val = None
 
             else:
-                if v is None or (isinstance(v, str) and v.strip() == "") or (not isinstance(v, str) and pd.isna(v)):
+                if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
                     val = None
                 else:
                     val = v
@@ -381,7 +498,7 @@ if st.session_state.active_tab == "📝 Add Session":
                 "steep_time_changes": (changes_text or None),
                 "temperature_c": safe_int(temperature_c_txt),
                 "amount_used_g": safe_float(amount_used_g_txt),
-                "session_at": datetime.utcnow().isoformat()
+                "session_at": datetime.utcnow().isoformat(),
             }
             try:
                 SUPABASE.table("steeps").insert(row).execute()  # type: ignore
@@ -456,8 +573,10 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "processing_notes": processing_notes_val,
                 "elevation_m": elevation_m,  # TEXT
                 "picking_season": picking_season_val,
-                "Buy_again": buy_again_val,  # NEW field (text)
-                "created_at": datetime.utcnow().isoformat()
+                # Write both keys for compatibility with existing schema
+                "buy_again": buy_again_val,
+                "Buy_again": buy_again_val,
+                "created_at": datetime.utcnow().isoformat(),
             }
             try:
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
@@ -494,8 +613,10 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
                 roast_idx = safe_index(roast_options, row.iloc[0].get("roasting", ""))
 
-                # Current Buy_again value mapped to dropdown
-                current_buy_again = row.iloc[0].get("Buy_again", None)
+                # Normalize current buy_again (accept either column)
+                current_buy_again = row.iloc[0].get("buy_again", None)
+                if current_buy_again is None:
+                    current_buy_again = row.iloc[0].get("Buy_again", None)
                 buy_again_idx = safe_index(BUY_AGAIN_OPTIONS, current_buy_again, default=0)
 
                 colA, colB = st.columns(2)
@@ -508,7 +629,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                     processing_notes_new = st.text_area(
                         "Processing notes",
                         value=str(row.iloc[0].get("processing_notes", "") or ""),
-                        key=f"edit_tea_processing_notes_{tea_pk_val}"
+                        key=f"edit_tea_processing_notes_{tea_pk_val}",
                     )
                 with colB:
                     cultivar_new = st.text_input("Cultivar", value=str(row.iloc[0].get("cultivar", "") or ""))
@@ -519,19 +640,19 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                     elevation_m_new = st.text_input(
                         "Elevation (m)",
                         value=str(row.iloc[0].get("elevation_m", "") or ""),
-                        key=f"edit_tea_elevation_m_{tea_pk_val}"
+                        key=f"edit_tea_elevation_m_{tea_pk_val}",
                     )
                     picking_season_new = st.text_input(
                         "Picking season",
                         value=str(row.iloc[0].get("picking_season", "") or ""),
-                        key=f"edit_tea_picking_season_{tea_pk_val}"
+                        key=f"edit_tea_picking_season_{tea_pk_val}",
                     )
                     # Buy_again dropdown (key depends on tea id to avoid sticky state)
                     buy_again_new_sel = st.selectbox(
                         "Buy again",
                         options=BUY_AGAIN_OPTIONS,
                         index=buy_again_idx,
-                        key=f"edit_tea_buy_again_{tea_pk_val}"
+                        key=f"edit_tea_buy_again_{tea_pk_val}",
                     )
 
                 save_btn = st.button("Save changes", type="primary", key=f"edit_tea_save_{tea_pk_val}")
@@ -551,9 +672,15 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "pick_year": safe_int(pick_year_new),
                             "oxidation": (oxidation_new.strip() or None),
                             "roasting": (roasting_new.strip() or None),
-                            "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
+                            "processing_notes": (processing_notes_new.strip() or None)
+                            if isinstance(processing_notes_new, str)
+                            else None,
                             "elevation_m": (elevation_m_new.strip() or None),
-                            "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
+                            "picking_season": (picking_season_new.strip() or None)
+                            if isinstance(picking_season_new, str)
+                            else None,
+                            # Write both keys for compatibility
+                            "buy_again": buy_again_to_save,
                             "Buy_again": buy_again_to_save,
                         }
                         payload = {k: _json_sanitize(v) for k, v in payload.items()}
@@ -572,8 +699,11 @@ elif st.session_state.active_tab == "📜 Steep history":
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
         joined = steeps_df.merge(
-            teas_df.rename(columns={teas_key: "tea_id"})[["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]],
-            on="tea_id", how="left"
+            teas_df.rename(columns={teas_key: "tea_id"})[
+                ["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]
+            ],
+            on="tea_id",
+            how="left",
         )
     else:
         joined = steeps_df.copy()
@@ -591,30 +721,48 @@ elif st.session_state.active_tab == "📜 Steep history":
         recent_n = st.selectbox("Show last N", options=[10, 20, 50, 100], index=1, key="recent_steeps_n")
     with recent_right:
         # Only enable this after a tea is chosen
-        # We still render a checkbox so layout doesn't jump
-        selected_tea_placeholder = "(select a tea)"
         tea_names_for_sel = (
             teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
         )
     tea_names = tea_names_for_sel[tea_names_for_sel != ""].unique().tolist() if not teas_df.empty else []
     tea_names_sorted = sorted(tea_names)
 
-    # Put the tea selector after "Recent steeps" controls, keeps the page feeling progressive
-    selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
+    # Put the tea selector after "Recent steeps" controls
+    selected_tea = st.selectbox(
+        "Find a tea",
+        options=["(select a tea)"] + tea_names_sorted,
+        index=0,
+        key="hist_select_tea",
+    )
 
     only_selected = False
     if selected_tea != "(select a tea)":
-        only_selected = st.checkbox("Only show selected tea in recent steeps", value=False, key=f"recent_only_{selected_tea}")
+        only_selected = st.checkbox(
+            "Only show selected tea in recent steeps", value=False, key=f"recent_only_{selected_tea}"
+        )
 
     recent_df = joined.copy()
     if only_selected and selected_tea != "(select a tea)":
         recent_df = recent_df[recent_df["name"] == selected_tea]
-    recent_cols = [c for c in ["session_at", "name", "rating", "tasting_notes", "steep_notes",
-                               "initial_steep_time_sec", "temperature_c", "amount_used_g",
-                               "supplier", "type"] if c in recent_df.columns]
+    recent_cols = [
+        c
+        for c in [
+            "session_at",
+            "name",
+            "rating",
+            "tasting_notes",
+            "steep_notes",
+            "initial_steep_time_sec",
+            "temperature_c",
+            "amount_used_g",
+            "supplier",
+            "type",
+        ]
+        if c in recent_df.columns
+    ]
     st.dataframe(
         recent_df.sort_values("session_at", ascending=False)[recent_cols].head(recent_n),
-        use_container_width=True
+        use_container_width=True,
     )
 
     # ---- Detailed table for selected tea (editable) ----
@@ -631,12 +779,21 @@ elif st.session_state.active_tab == "📜 Steep history":
                 st.dataframe(rows.sort_values("session_at", ascending=False), use_container_width=True)
             else:
                 display_cols = [
-                    steep_pk, "session_at", "rating",
-                    "tasting_notes", "steep_notes",
-                    "initial_steep_time_sec", "steep_time_changes",
-                    "temperature_c", "amount_used_g",
+                    steep_pk,
+                    "session_at",
+                    "rating",
+                    "tasting_notes",
+                    "steep_notes",
+                    "initial_steep_time_sec",
+                    "steep_time_changes",
+                    "temperature_c",
+                    "amount_used_g",
                     # meta (read-only)
-                    "type", "supplier", "region", "cultivar", "roasting",
+                    "type",
+                    "supplier",
+                    "region",
+                    "cultivar",
+                    "roasting",
                 ]
                 present_cols = [c for c in display_cols if c in rows.columns]
                 rows = rows[present_cols].copy()
@@ -675,10 +832,14 @@ elif st.session_state.active_tab == "📜 Steep history":
                     else:
                         orig = st.session_state.get("orig_steeps_df", rows)
                         editable_cols = [
-                            "session_at", "rating",
-                            "tasting_notes", "steep_notes",
-                            "initial_steep_time_sec", "steep_time_changes",
-                            "temperature_c", "amount_used_g",
+                            "session_at",
+                            "rating",
+                            "tasting_notes",
+                            "steep_notes",
+                            "initial_steep_time_sec",
+                            "steep_time_changes",
+                            "temperature_c",
+                            "amount_used_g",
                         ]
                         changed = diff_rows(orig, edited, steep_pk, editable_cols)
                         if changed.empty:
@@ -701,8 +862,11 @@ elif st.session_state.active_tab == "📊 Analysis":
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
         joined = steeps_df.merge(
-            teas_df.rename(columns={teas_key: "tea_id"})[["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]],
-            on="tea_id", how="left"
+            teas_df.rename(columns={teas_key: "tea_id"})[
+                ["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]
+            ],
+            on="tea_id",
+            how="left",
         )
     else:
         joined = steeps_df.copy()
@@ -718,9 +882,13 @@ elif st.session_state.active_tab == "📊 Analysis":
     with right:
         supplier_opts = sorted(
             teas_df.get("supplier", pd.Series(dtype=str))
-                   .dropna().astype(str).str.strip()
-                   .replace("", pd.NA).dropna()
-                   .unique().tolist()
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .unique()
+            .tolist()
         )
         supplier_filter = st.selectbox("Supplier", options=["(all)"] + supplier_opts, index=0, key="analysis_supplier")
 

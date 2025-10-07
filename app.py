@@ -1,17 +1,16 @@
 # =========================
-# Tea Notes (Steeps) — full app with early raw JSON/CSV endpoint
+# Tea Notes (Steeps) — UI only, buy_again-first
 # =========================
 
-import json
 import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-import pandas as pd
 import numpy as np
-import streamlit as st
+import pandas as pd
 import plotly.express as px
-from streamlit import column_config  # optional, for nicer column configs
+import streamlit as st
+from streamlit import column_config  # noqa: F401
 
 # -------------------- Supabase availability --------------------
 try:
@@ -19,19 +18,6 @@ try:
     SUPABASE_AVAILABLE = True
 except Exception:
     SUPABASE_AVAILABLE = False
-
-
-# -------------------- Helpers: query params + DB --------------------
-def _get_query_params() -> Dict[str, str]:
-    """Return query params as a flat dict[str, str], working on old/new Streamlit."""
-    try:
-        # New API (1.33+)
-        qp = st.query_params
-        return {k: v for k, v in qp.items()}
-    except Exception:
-        # Older API
-        qp = st.experimental_get_query_params()
-        return {k: (v[0] if isinstance(v, list) and v else v) for k, v in qp.items()}
 
 
 @st.cache_resource
@@ -54,17 +40,17 @@ def get_supabase() -> Optional["Client"]:
 
 @st.cache_data(ttl=60)
 def load_data() -> Dict[str, pd.DataFrame]:
-    """Load teas and steeps from Supabase and normalize Buy_again/buy_again in-memory."""
+    """Load teas and steeps; normalize buy_again in-memory for display only."""
     if SUPABASE is None:
         return {"teas": pd.DataFrame(), "steeps": pd.DataFrame()}
+
     teas = pd.DataFrame(SUPABASE.table("teas").select("*").execute().data)  # type: ignore
     steeps = pd.DataFrame(SUPABASE.table("steeps").select("*").execute().data)  # type: ignore
 
-    # Normalize Buy_again casing/alias for compatibility
+    # READ-ONLY normalization for UI convenience:
+    # If DB still has legacy "Buy_again", mirror into buy_again for display only.
     if "buy_again" not in teas.columns and "Buy_again" in teas.columns:
         teas["buy_again"] = teas["Buy_again"]
-    if "Buy_again" not in teas.columns and "buy_again" in teas.columns:
-        teas["Buy_again"] = teas["buy_again"]
 
     return {"teas": teas, "steeps": steeps}
 
@@ -105,7 +91,6 @@ def safe_float(text: str) -> Optional[float]:
 
 
 def safe_index(options: List[str], value: Any, default: int = 0) -> int:
-    """Return a valid index for Streamlit selectbox; fall back to default if missing."""
     if value is None:
         return default
     try:
@@ -123,7 +108,6 @@ def get_pk_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
 
 
 def _json_sanitize(value: Any) -> Any:
-    """Convert pandas/NumPy NaN/NaT to None and NumPy scalars to Python scalars for JSON."""
     if value is None:
         return None
     if isinstance(value, (pd.Timestamp,)):
@@ -141,16 +125,17 @@ def _json_sanitize(value: Any) -> Any:
 
 
 def update_supabase_rows(table: str, pk_col: str, rows: List[Dict[str, Any]]) -> List[str]:
-    """Update rows by primary key; returns a list of error messages (empty if success)."""
+    """Update rows by primary key; only send columns that exist in remote table."""
     errs = []
     if SUPABASE is None:
         return ["Database is not configured."]
+    existing_cols = set(teas_df.columns) if table == "teas" else set(steeps_df.columns)
     for r in rows:
         pk_val = r.get(pk_col)
         if pk_val is None or (isinstance(pk_val, float) and np.isnan(pk_val)):
             errs.append(f"Missing {pk_col} in row; skipped.")
             continue
-        payload = {k: _json_sanitize(v) for k, v in r.items() if k != pk_col}
+        payload = {k: _json_sanitize(v) for k, v in r.items() if k != pk_col and k in existing_cols}
         try:
             SUPABASE.table(table).update(payload).eq(pk_col, pk_val).execute()  # type: ignore
         except Exception as e:
@@ -159,7 +144,7 @@ def update_supabase_rows(table: str, pk_col: str, rows: List[Dict[str, Any]]) ->
 
 
 def diff_rows(original: pd.DataFrame, edited: pd.DataFrame, pk_col: str, editable_cols: List[str]) -> pd.DataFrame:
-    """Return only rows from 'edited' that changed compared to 'original' for the given cols."""
+    """Return only the edited rows that changed in editable columns."""
     if original.empty or edited.empty:
         return edited.iloc[0:0].copy()
     left = original.set_index(pk_col)
@@ -189,7 +174,6 @@ def _to_iso_utc_or_none(value):
 
 
 def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str, Any]]:
-    """Coerce edited values to JSON-safe, DB-correct types."""
     payloads: List[Dict[str, Any]] = []
     for _, r in changed_df.iterrows():
         rec: Dict[str, Any] = {pk_col: r[pk_col]}
@@ -207,10 +191,8 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
             if c not in changed_df.columns:
                 continue
             v = r[c]
-
             if c == "session_at":
                 val = _to_iso_utc_or_none(v)
-
             elif c in INT_COLS_STEEP:
                 if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
                     val = None
@@ -219,7 +201,6 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
                         val = int(round(float(v)))
                     except Exception:
                         val = None
-
             elif c in FLOAT_COLS_STEEP:
                 if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
                     val = None
@@ -228,169 +209,44 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
                         val = float(v)
                     except Exception:
                         val = None
-
             else:
                 if v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, float) and np.isnan(v)):
                     val = None
                 else:
                     val = v
-
             rec[c] = val
-
         payloads.append(rec)
     return payloads
 
 
-# -------------------- Supabase + data (for raw and UI) --------------------
+# -------------------- Supabase + data --------------------
 SUPABASE = get_supabase()
 _db = load_data()
 teas_df = _db["teas"].copy()
 steeps_df = _db["steeps"].copy()
 
-
-# -------------------- EARLY RAW JSON/CSV ENDPOINT (must run before any UI) --------------------
-params = _get_query_params()
-if params.get("raw") is not None:
-    mode = (params.get("raw") or "steeps").lower()
-
-    # Build join similar to view
-    if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
-        teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
-        joined = steeps_df.merge(
-            teas_df.rename(columns={teas_key: "tea_id"})[
-                [
-                    "tea_id",
-                    "name",
-                    "type",
-                    "supplier",
-                    "region",
-                    "cultivar",
-                    "roasting",
-                    "buy_again",
-                ]
-            ],
-            on="tea_id",
-            how="left",
-        )
-    else:
-        joined = steeps_df.copy()
-
-    # Optional filters
-    tea_name_param = params.get("tea_name")
-    tea_id_param = params.get("tea_id")
-    type_param = params.get("type")
-    q_param = params.get("q")  # search tasting/steep notes
-    start_param = params.get("from")
-    end_param = params.get("to")
-    limit_param = params.get("limit")
-    order_param = (params.get("order") or "desc").lower()
-
-    if mode in ("steeps", "steeps_with_tea"):
-        df_out = joined
-    elif mode == "teas":
-        df_out = teas_df
-    else:
-        st.write({"error": "Unknown ?raw parameter. Use ?raw=steeps or ?raw=teas."})
-        st.stop()
-
-    # Coerce session_at for filtering/sorting
-    if "session_at" in df_out.columns:
-        df_out["session_at"] = pd.to_datetime(df_out["session_at"], errors="coerce", utc=True)
-
-    # Apply filters (case-insensitive where sensible)
-    if tea_name_param and "name" in df_out.columns:
-        df_out = df_out[df_out["name"].astype(str).str.contains(tea_name_param, case=False, na=False)]
-    if tea_id_param and "tea_id" in df_out.columns:
-        try:
-            df_out = df_out[df_out["tea_id"].astype(str) == str(tea_id_param)]
-        except Exception:
-            pass
-    if type_param and "type" in df_out.columns:
-        df_out = df_out[df_out["type"].astype(str).str.lower() == str(type_param).lower()]
-    if q_param:
-        # search across text cols
-        for c in ["tasting_notes", "steep_notes"]:
-            if c not in df_out.columns:
-                df_out[c] = None
-        mask = (
-            df_out["tasting_notes"].astype(str).str.contains(q_param, case=False, na=False)
-            | df_out["steep_notes"].astype(str).str.contains(q_param, case=False, na=False)
-        )
-        df_out = df_out[mask]
-    if start_param and "session_at" in df_out.columns:
-        try:
-            start_ts = pd.to_datetime(start_param, utc=True)
-            df_out = df_out[df_out["session_at"] >= start_ts]
-        except Exception:
-            pass
-    if end_param and "session_at" in df_out.columns:
-        try:
-            end_ts = pd.to_datetime(end_param, utc=True)
-            df_out = df_out[df_out["session_at"] < end_ts]
-        except Exception:
-            pass
-
-    # Sort newest first if session_at exists
-    if "session_at" in df_out.columns:
-        df_out = df_out.sort_values("session_at", ascending=(order_param == "asc"))
-
-    # Apply limit
-    if limit_param:
-        try:
-            n = int(limit_param)
-            if n > 0:
-                df_out = df_out.head(n)
-        except Exception:
-            pass
-
-    # Output format
-    fmt = (params.get("fmt") or "json").lower()
-    if fmt == "csv":
-        st.write(df_out.to_csv(index=False))
-    elif fmt in ("ndjson", "jsonl"):
-        # One JSON object per line
-        recs = json.loads(df_out.to_json(orient="records"))
-        st.write("\n".join(json.dumps(r, ensure_ascii=False) for r in recs))
-    else:
-        st.write(json.loads(df_out.to_json(orient="records")))
-    st.stop()
-
-
 # ========================= UI SECTION =========================
-
-# -------------------- Page config --------------------
 st.set_page_config(page_title="Tea Notes (Steeps)", page_icon="🍵", layout="wide")
 
-# -------------------- CSS --------------------
 st.markdown(
     """
 <style>
-/* Radio looks like tabs */
+/* "tabs" look for radio */
 [data-testid="stHorizontalBlock"] > div:has(> div[data-testid="stRadio"]) { margin-bottom: 0.5rem; }
-div[data-testid="stRadio"] > div[role="radiogroup"] {
-  display: flex; gap: .25rem; flex-wrap: wrap;
-}
+div[data-testid="stRadio"] > div[role="radiogroup"] { display:flex; gap:.25rem; flex-wrap:wrap; }
 div[data-testid="stRadio"] label {
-  border: 1px solid var(--secondary-background-color);
-  padding: .4rem .8rem; border-radius: .5rem .5rem 0 0;
-  background: var(--secondary-background-color); cursor: pointer;
-  font-weight: 500;
+  border:1px solid var(--secondary-background-color); padding:.4rem .8rem; border-radius:.5rem .5rem 0 0;
+  background:var(--secondary-background-color); cursor:pointer; font-weight:500;
 }
 div[data-testid="stRadio"] label[data-checked="true"] {
-  background: var(--background-color);
-  border-bottom-color: var(--background-color);
-  box-shadow: 0 -2px 0 0 var(--primary-color) inset;
+  background:var(--background-color); border-bottom-color:var(--background-color);
+  box-shadow:0 -2px 0 0 var(--primary-color) inset;
 }
-
-/* Wrap text in grid cells (dataframe / data editor) */
+/* wrap table text */
 [data-testid="stDataFrame"] div[role="gridcell"],
 [data-testid="stDataFrame"] div[data-testid="cell-container"],
-[data-testid="stDataFrame"] td, 
-[data-testid="stDataFrame"] span, 
-[data-testid="stDataFrame"] p {
-  white-space: normal !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
+[data-testid="stDataFrame"] td, [data-testid="stDataFrame"] span, [data-testid="stDataFrame"] p {
+  white-space:normal !important; overflow:visible !important; text-overflow:clip !important;
 }
 </style>
 """,
@@ -399,76 +255,9 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 
 st.title("🍵 Tea Notes — Sessions & Scores")
 
-# -------------------- Config for UI --------------------
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
 ROASTING_OPTIONS = ["Unroasted", "Roasted", "Light", "Medium", "Heavy"]
 BUY_AGAIN_OPTIONS = ["Unstated", "Maybe", "No", "Yes", "Definitely"]
-
-
-def plot_sessions_with_average(df: pd.DataFrame, title: str = "Session ratings"):
-    if df.empty or "rating" not in df.columns:
-        st.info("No sessions to chart yet.")
-        return
-    working = df.copy()
-    working["session_at"] = ensure_datetime(working.get("session_at", pd.Series(dtype="datetime64[ns]")))
-    working = working.dropna(subset=["rating"])
-    if working.empty:
-        st.info("No ratings available to chart yet.")
-        return
-    avg = working["rating"].mean()
-    fig = px.line(
-        working.sort_values("session_at"),
-        x="session_at",
-        y="rating",
-        color="name",
-        markers=True,
-        title=title,
-    )
-    fig.update_traces(mode="lines+markers", hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Rating %{y}<extra></extra>")
-    fig.add_hline(y=avg, line_dash="dash", annotation_text=f"Average: {avg:.1f}", annotation_position="top left", opacity=0.7)
-    fig.update_layout(
-        margin=dict(l=12, r=12, t=48, b=12),
-        legend=dict(title="Tea", orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hovermode="x unified",
-    )
-    fig.update_xaxes(title_text="Session time")
-    fig.update_yaxes(title_text="Rating (0–100)")
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
-    """Box & whisker: Y=rating, X=tea name, show individual points."""
-    if df is None or len(df) == 0 or "name" not in df.columns or "rating" not in df.columns:
-        st.info("No ratings to chart yet.")
-        return
-    working = df.copy()
-    working["rating"] = pd.to_numeric(working["rating"], errors="coerce")
-    for col in ["supplier", "type", "session_at", "tasting_notes", "steep_notes"]:
-        if col not in working.columns:
-            working[col] = None
-    working = working.dropna(subset=["rating"]) if not working.empty else working
-    if working.empty:
-        st.info("No ratings to chart yet.")
-        return
-    medians = working.groupby("name")["rating"].median().sort_values(ascending=False)
-    fig = px.box(
-        working,
-        x="name",
-        y="rating",
-        points="all",
-        hover_data=["supplier", "type", "session_at", "tasting_notes", "steep_notes"],
-        title=title,
-        category_orders={"name": medians.index.tolist()},
-    )
-    fig.update_layout(
-        margin=dict(l=12, r=12, t=48, b=12),
-        xaxis_title="Tea",
-        yaxis_title="Rating",
-        hovermode="closest",
-    )
-    fig.update_yaxes(range=[0, 5])
-    st.plotly_chart(fig, use_container_width=True)
-
 
 # -------------------- Nav --------------------
 NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history", "📊 Analysis"]
@@ -476,17 +265,12 @@ if "active_tab" not in st.session_state:
     st.session_state.active_tab = NAV_ITEMS[0]
 
 st.session_state.active_tab = st.radio(
-    "Tabs",
-    NAV_ITEMS,
-    index=NAV_ITEMS.index(st.session_state.active_tab),
-    horizontal=True,
-    label_visibility="collapsed",
-    key="nav_radio",
+    "Tabs", NAV_ITEMS, index=NAV_ITEMS.index(st.session_state.active_tab),
+    horizontal=True, label_visibility="collapsed", key="nav_radio",
 )
 
 # -------------------- Screens --------------------
 if st.session_state.active_tab == "📝 Add Session":
-    # ---------- Add Session ----------
     tea_choices = ["(select)"] + teas_df.get("name", pd.Series(dtype=str)).fillna("(unnamed)").tolist()
     tea_selected = st.selectbox("Tea", tea_choices, index=0, key="add_sess_tea")
     tea_selected_row = None
@@ -530,7 +314,6 @@ if st.session_state.active_tab == "📝 Add Session":
                 st.error(f"Failed to save: {e}")
 
 elif st.session_state.active_tab == "➕ Add Tea":
-    # ---------- Add Tea ----------
     colA, colB = st.columns(2)
 
     subtype_opts = options_from_column(teas_df, "subtype")
@@ -557,10 +340,8 @@ elif st.session_state.active_tab == "➕ Add Tea":
         roasting = st.selectbox("Roasting", options=[""] + ROASTING_OPTIONS, index=0, key="add_tea_roasting")
         elevation_m_txt = st.text_input("Elevation (m)", value="", key="add_tea_elevation_m")
         picking_season = st.text_input("Picking season", key="add_tea_picking_season")
-        # Buy_again dropdown (text)
         buy_again_sel = st.selectbox("Buy again", options=BUY_AGAIN_OPTIONS, index=0, key="add_tea_buy_again")
 
-    # Resolve chosen vs new values (all optional)
     subtype = (subtype_new.strip() or subtype_sel.strip() or None)
     supplier = (supplier_new.strip() or supplier_sel.strip() or None)
     cultivar = (cultivar_new.strip() or cultivar_sel.strip() or None)
@@ -568,8 +349,6 @@ elif st.session_state.active_tab == "➕ Add Tea":
     pick_year = safe_int(pick_year_txt) if pick_year_txt else None
     roasting_val = roasting.strip() or None
     tea_type_val = tea_type.strip() or None
-
-    # Extra fields (as text)
     elevation_m = (elevation_m_txt.strip() or None)
     processing_notes_val = (processing_notes.strip() or None) if isinstance(processing_notes, str) else None
     picking_season_val = (picking_season.strip() or None) if isinstance(picking_season, str) else None
@@ -582,6 +361,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
         elif SUPABASE is None:
             st.error("Database is not configured.")
         else:
+            # Build payload, then filter to columns that exist remotely (prevents PGRST204).
             tea_row = {
                 "name": tea_name.strip(),
                 "type": tea_type_val,
@@ -594,21 +374,23 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "oxidation": (oxidation.strip() or None),
                 "roasting": roasting_val,
                 "processing_notes": processing_notes_val,
-                "elevation_m": elevation_m,  # TEXT
+                "elevation_m": elevation_m,
                 "picking_season": picking_season_val,
-                # Write both keys for compatibility with existing schema
-                "buy_again": buy_again_val,
-                "Buy_again": buy_again_val,
+                "buy_again": buy_again_val,  # ← only this key, as requested
                 "created_at": datetime.utcnow().isoformat(),
             }
+            allowed = set(teas_df.columns)
+            if "buy_again" not in allowed:
+                st.warning("Your 'teas' table doesn’t have a 'buy_again' column yet. This field won’t be saved.")
+            tea_row = {k: _json_sanitize(v) for k, v in tea_row.items() if k in allowed}
             try:
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
                 st.success("Saved.")
+                st.cache_data.clear()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
 elif st.session_state.active_tab == "✏️ Edit tea":
-    # ---------- Edit Tea Details ----------
     st.subheader("✏️ Edit tea")
 
     tea_pk = get_pk_column(teas_df, ["tea_id", "id"])
@@ -636,7 +418,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
                 roast_idx = safe_index(roast_options, row.iloc[0].get("roasting", ""))
 
-                # Normalize current buy_again (accept either column)
+                # Current buy_again (UI only; fallback to legacy column for display)
                 current_buy_again = row.iloc[0].get("buy_again", None)
                 if current_buy_again is None:
                     current_buy_again = row.iloc[0].get("Buy_again", None)
@@ -670,7 +452,6 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         value=str(row.iloc[0].get("picking_season", "") or ""),
                         key=f"edit_tea_picking_season_{tea_pk_val}",
                     )
-                    # Buy_again dropdown (key depends on tea id to avoid sticky state)
                     buy_again_new_sel = st.selectbox(
                         "Buy again",
                         options=BUY_AGAIN_OPTIONS,
@@ -702,11 +483,12 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "picking_season": (picking_season_new.strip() or None)
                             if isinstance(picking_season_new, str)
                             else None,
-                            # Write both keys for compatibility
-                            "buy_again": buy_again_to_save,
-                            "Buy_again": buy_again_to_save,
+                            "buy_again": buy_again_to_save,  # ← write only this
                         }
-                        payload = {k: _json_sanitize(v) for k, v in payload.items()}
+                        allowed = set(teas_df.columns)
+                        if "buy_again" not in allowed:
+                            st.warning("Your 'teas' table doesn’t have a 'buy_again' column yet. This field won’t be saved.")
+                        payload = {k: _json_sanitize(v) for k, v in payload.items() if k in allowed}
                         try:
                             SUPABASE.table("teas").update(payload).eq(tea_pk, tea_pk_val).execute()  # type: ignore
                             st.success("Tea updated.")
@@ -715,7 +497,6 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             st.error(f"Failed to update: {e}")
 
 elif st.session_state.active_tab == "📜 Steep history":
-    # ---------- Steep history (editable) ----------
     st.subheader("📜 Steep history")
 
     # Join steeps to teas to show tea meta
@@ -737,57 +518,34 @@ elif st.session_state.active_tab == "📜 Steep history":
     joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
     joined = joined.sort_values("session_at", ascending=False)
 
-    # ---- Recent steeps (reactive, no buttons) ----
     st.markdown("### Recent steeps")
     recent_left, recent_right = st.columns([1, 1])
     with recent_left:
         recent_n = st.selectbox("Show last N", options=[10, 20, 50, 100], index=1, key="recent_steeps_n")
     with recent_right:
-        tea_names_for_sel = (
-            teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
-        )
+        tea_names_for_sel = teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
     tea_names = tea_names_for_sel[tea_names_for_sel != ""].unique().tolist() if not teas_df.empty else []
     tea_names_sorted = sorted(tea_names)
 
-    # Put the tea selector after "Recent steeps" controls
-    selected_tea = st.selectbox(
-        "Find a tea",
-        options=["(select a tea)"] + tea_names_sorted,
-        index=0,
-        key="hist_select_tea",
-    )
+    selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
 
     only_selected = False
     if selected_tea != "(select a tea)":
-        only_selected = st.checkbox(
-            "Only show selected tea in recent steeps", value=False, key=f"recent_only_{selected_tea}"
-        )
+        only_selected = st.checkbox("Only show selected tea in recent steeps", value=False, key=f"recent_only_{selected_tea}")
 
     recent_df = joined.copy()
     if only_selected and selected_tea != "(select a tea)":
         recent_df = recent_df[recent_df["name"] == selected_tea]
-    recent_cols = [
-        c
-        for c in [
-            "session_at",
-            "name",
-            "rating",
-            "tasting_notes",
-            "steep_notes",
-            "initial_steep_time_sec",
-            "temperature_c",
-            "amount_used_g",
-            "supplier",
-            "type",
-        ]
-        if c in recent_df.columns
-    ]
+    recent_cols = [c for c in [
+        "session_at","name","rating","tasting_notes","steep_notes",
+        "initial_steep_time_sec","temperature_c","amount_used_g","supplier","type"
+    ] if c in recent_df.columns]
     st.dataframe(
         recent_df.sort_values("session_at", ascending=False)[recent_cols].head(recent_n),
         use_container_width=True,
     )
 
-    # ---- Detailed table for selected tea (editable) ----
+    # Detailed table for selected tea (editable)
     if selected_tea == "(select a tea)":
         st.info("Select a tea above to view and edit its steeps.")
     else:
@@ -801,26 +559,15 @@ elif st.session_state.active_tab == "📜 Steep history":
                 st.dataframe(rows.sort_values("session_at", ascending=False), use_container_width=True)
             else:
                 display_cols = [
-                    steep_pk,
-                    "session_at",
-                    "rating",
-                    "tasting_notes",
-                    "steep_notes",
-                    "initial_steep_time_sec",
-                    "steep_time_changes",
-                    "temperature_c",
-                    "amount_used_g",
-                    # meta (read-only)
-                    "type",
-                    "supplier",
-                    "region",
-                    "cultivar",
-                    "roasting",
+                    steep_pk, "session_at", "rating",
+                    "tasting_notes", "steep_notes",
+                    "initial_steep_time_sec", "steep_time_changes",
+                    "temperature_c", "amount_used_g",
+                    "type", "supplier", "region", "cultivar", "roasting",
                 ]
                 present_cols = [c for c in display_cols if c in rows.columns]
                 rows = rows[present_cols].copy()
 
-                # Remember original for diffing on this tea
                 st.session_state["orig_steeps_df"] = rows.copy()
 
                 readonly_cols = ["type", "supplier", "region", "cultivar", "roasting"]
@@ -829,7 +576,7 @@ elif st.session_state.active_tab == "📜 Steep history":
                     if c in readonly_cols:
                         col_conf[c] = st.column_config.Column(c, disabled=True)
                     elif c in ["tasting_notes", "steep_notes"]:
-                        col_conf[c] = st.column_config.TextColumn(c)  # CSS handles wrapping
+                        col_conf[c] = st.column_config.TextColumn(c)
                     elif c in ["rating", "amount_used_g"]:
                         col_conf[c] = st.column_config.NumberColumn(c, step=0.1, format="%.2f")
                     elif c in ["initial_steep_time_sec", "temperature_c"]:
@@ -840,28 +587,17 @@ elif st.session_state.active_tab == "📜 Steep history":
                         col_conf[c] = st.column_config.Column(c, disabled=True)
 
                 edited = st.data_editor(
-                    rows,
-                    key="steep_editor",
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config=col_conf,
+                    rows, key="steep_editor", use_container_width=True, hide_index=True, column_config=col_conf,
                 )
 
-                # Save button
                 if st.button("Save changes", type="primary", key="save_steeps_btn"):
                     if SUPABASE is None:
                         st.error("Database is not configured.")
                     else:
                         orig = st.session_state.get("orig_steeps_df", rows)
                         editable_cols = [
-                            "session_at",
-                            "rating",
-                            "tasting_notes",
-                            "steep_notes",
-                            "initial_steep_time_sec",
-                            "steep_time_changes",
-                            "temperature_c",
-                            "amount_used_g",
+                            "session_at","rating","tasting_notes","steep_notes",
+                            "initial_steep_time_sec","steep_time_changes","temperature_c","amount_used_g",
                         ]
                         changed = diff_rows(orig, edited, steep_pk, editable_cols)
                         if changed.empty:
@@ -870,25 +606,21 @@ elif st.session_state.active_tab == "📜 Steep history":
                             payloads = build_steep_payloads(changed, steep_pk)
                             errors = update_supabase_rows("steeps", steep_pk, payloads)
                             if errors:
-                                for e in errors:
-                                    st.error(e)
+                                for e in errors: st.error(e)
                             else:
                                 st.success(f"Saved {len(payloads)} change(s).")
-                                st.cache_data.clear()  # refresh cached data
+                                st.cache_data.clear()
 
 elif st.session_state.active_tab == "📊 Analysis":
-    # ---------- Analysis ----------
     st.subheader("📊 Analysis")
 
-    # Join for charting
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
         joined = steeps_df.merge(
             teas_df.rename(columns={teas_key: "tea_id"})[
                 ["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]
             ],
-            on="tea_id",
-            how="left",
+            on="tea_id", how="left",
         )
     else:
         joined = steeps_df.copy()
@@ -904,13 +636,7 @@ elif st.session_state.active_tab == "📊 Analysis":
     with right:
         supplier_opts = sorted(
             teas_df.get("supplier", pd.Series(dtype=str))
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .replace("", pd.NA)
-            .dropna()
-            .unique()
-            .tolist()
+            .dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
         )
         supplier_filter = st.selectbox("Supplier", options=["(all)"] + supplier_opts, index=0, key="analysis_supplier")
 
@@ -922,6 +648,29 @@ elif st.session_state.active_tab == "📊 Analysis":
     scope_df = joined[scope_mask].copy()
 
     st.markdown("### Box & whisker by tea")
+    # Chart uses rating as 0–5 as per your UI; adjust axis label if needed
+    def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
+        if df is None or len(df) == 0 or "name" not in df.columns or "rating" not in df.columns:
+            st.info("No ratings to chart yet."); return
+        working = df.copy()
+        working["rating"] = pd.to_numeric(working["rating"], errors="coerce")
+        for col in ["supplier", "type", "session_at", "tasting_notes", "steep_notes"]:
+            if col not in working.columns:
+                working[col] = None
+        working = working.dropna(subset=["rating"]) if not working.empty else working
+        if working.empty:
+            st.info("No ratings to chart yet."); return
+        medians = working.groupby("name")["rating"].median().sort_values(ascending=False)
+        fig = px.box(
+            working, x="name", y="rating", points="all",
+            hover_data=["supplier","type","session_at","tasting_notes","steep_notes"],
+            title=title, category_orders={"name": medians.index.tolist()}
+        )
+        fig.update_layout(margin=dict(l=12, r=12, t=48, b=12),
+                          xaxis_title="Tea", yaxis_title="Rating", hovermode="closest")
+        fig.update_yaxes(range=[0, 5])
+        st.plotly_chart(fig, use_container_width=True)
+
     plot_box_by_tea(scope_df)
 
     with st.expander("View data used in chart"):

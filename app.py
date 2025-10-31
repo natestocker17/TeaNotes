@@ -1,5 +1,5 @@
 # =========================
-# Tea Notes (Steeps) — UI only, buy_again-first
+# Tea Notes (Steeps) — UI updated for new Supabase schema
 # =========================
 
 import os
@@ -40,18 +40,12 @@ def get_supabase() -> Optional["Client"]:
 
 @st.cache_data(ttl=60)
 def load_data() -> Dict[str, pd.DataFrame]:
-    """Load teas and steeps; normalize buy_again in-memory for display only."""
+    """Load teas and steeps from Supabase."""
     if SUPABASE is None:
         return {"teas": pd.DataFrame(), "steeps": pd.DataFrame()}
 
     teas = pd.DataFrame(SUPABASE.table("teas").select("*").execute().data)  # type: ignore
     steeps = pd.DataFrame(SUPABASE.table("steeps").select("*").execute().data)  # type: ignore
-
-    # READ-ONLY normalization for UI convenience:
-    # If DB still has legacy "Buy_again", mirror into buy_again for display only.
-    if "buy_again" not in teas.columns and "Buy_again" in teas.columns:
-        teas["buy_again"] = teas["Buy_again"]
-
     return {"teas": teas, "steeps": steeps}
 
 
@@ -256,7 +250,6 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 st.title("🍵 Tea Notes — Sessions & Scores")
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
-ROASTING_OPTIONS = ["Unroasted", "Roasted", "Light", "Medium", "Heavy"]
 BUY_AGAIN_OPTIONS = ["Unstated", "Maybe", "No", "Yes", "Definitely"]
 
 # -------------------- Nav --------------------
@@ -330,26 +323,29 @@ elif st.session_state.active_tab == "➕ Add Tea":
         supplier_new = st.text_input("Or add new Supplier", key="add_tea_supplier_new")
         url = st.text_input("URL", key="add_tea_url")
         processing_notes = st.text_area("Processing notes", key="add_tea_processing_notes")
+        have_already_cb = st.checkbox("Have already", value=False, key="add_tea_have_already")
+        to_buy_cb = st.checkbox("To buy", value=False, key="add_tea_to_buy")
     with colB:
         cultivar_sel = st.selectbox("Cultivar", options=[""] + cultivar_opts, index=0, key="add_tea_cultivar_sel")
         cultivar_new = st.text_input("Or add new Cultivar", key="add_tea_cultivar_new")
         region_sel = st.selectbox("Region", options=[""] + region_opts, index=0, key="add_tea_region_sel")
         region_new = st.text_input("Or add new Region", key="add_tea_region_new")
         pick_year_txt = st.text_input("Pick year", value="", key="add_tea_pick_year")
-        oxidation = st.text_input("Oxidation", key="add_tea_oxidation")
-        roasting = st.selectbox("Roasting", options=[""] + ROASTING_OPTIONS, index=0, key="add_tea_roasting")
-        elevation_m_txt = st.text_input("Elevation (m)", value="", key="add_tea_elevation_m")
         picking_season = st.text_input("Picking season", key="add_tea_picking_season")
         buy_again_sel = st.selectbox("Buy again", options=BUY_AGAIN_OPTIONS, index=0, key="add_tea_buy_again")
+        st.markdown("**Pricing / weights (NZD & grams)**")
+        price_1 = st.text_input("Price 1 (NZD)", value="", key="add_tea_price1")
+        weight_1 = st.text_input("Weight 1 (g)", value="", key="add_tea_weight1")
+        price_2 = st.text_input("Price 2 (NZD)", value="", key="add_tea_price2")
+        weight_2 = st.text_input("Weight 2 (g)", value="", key="add_tea_weight2")
+        weight_per_session = st.text_input("Weight per session (g)", value="", key="add_tea_wps")
 
     subtype = (subtype_new.strip() or subtype_sel.strip() or None)
     supplier = (supplier_new.strip() or supplier_sel.strip() or None)
     cultivar = (cultivar_new.strip() or cultivar_sel.strip() or None)
     region = (region_new.strip() or region_sel.strip() or None)
     pick_year = safe_int(pick_year_txt) if pick_year_txt else None
-    roasting_val = roasting.strip() or None
     tea_type_val = tea_type.strip() or None
-    elevation_m = (elevation_m_txt.strip() or None)
     processing_notes_val = (processing_notes.strip() or None) if isinstance(processing_notes, str) else None
     picking_season_val = (picking_season.strip() or None) if isinstance(picking_season, str) else None
     buy_again_val = None if buy_again_sel == "Unstated" else buy_again_sel
@@ -361,7 +357,6 @@ elif st.session_state.active_tab == "➕ Add Tea":
         elif SUPABASE is None:
             st.error("Database is not configured.")
         else:
-            # Build payload, then filter to columns that exist remotely (prevents PGRST204).
             tea_row = {
                 "name": tea_name.strip(),
                 "type": tea_type_val,
@@ -371,17 +366,19 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "cultivar": cultivar,
                 "region": region,
                 "pick_year": pick_year,
-                "oxidation": (oxidation.strip() or None),
-                "roasting": roasting_val,
                 "processing_notes": processing_notes_val,
-                "elevation_m": elevation_m,
                 "picking_season": picking_season_val,
-                "buy_again": buy_again_val,  # ← only this key, as requested
+                "buy_again": buy_again_val,
+                "have_already": bool(have_already_cb),
+                "to_buy": bool(to_buy_cb),
+                "price_1_nzd": safe_float(price_1),
+                "weight_1_g": safe_float(weight_1),
+                "price_2_nzd": safe_float(price_2),
+                "weight_2_g": safe_float(weight_2),
+                "weight_per_session_g": safe_float(weight_per_session),
                 "created_at": datetime.utcnow().isoformat(),
             }
             allowed = set(teas_df.columns)
-            if "buy_again" not in allowed:
-                st.warning("Your 'teas' table doesn’t have a 'buy_again' column yet. This field won’t be saved.")
             tea_row = {k: _json_sanitize(v) for k, v in tea_row.items() if k in allowed}
             try:
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
@@ -414,14 +411,10 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 tea_pk_val = row.iloc[0][tea_pk]
 
                 type_options = [""] + TEA_TYPES
-                roast_options = [""] + ROASTING_OPTIONS
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
-                roast_idx = safe_index(roast_options, row.iloc[0].get("roasting", ""))
 
-                # Current buy_again (UI only; fallback to legacy column for display)
+                # Current buy_again
                 current_buy_again = row.iloc[0].get("buy_again", None)
-                if current_buy_again is None:
-                    current_buy_again = row.iloc[0].get("Buy_again", None)
                 buy_again_idx = safe_index(BUY_AGAIN_OPTIONS, current_buy_again, default=0)
 
                 colA, colB = st.columns(2)
@@ -436,17 +429,12 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         value=str(row.iloc[0].get("processing_notes", "") or ""),
                         key=f"edit_tea_processing_notes_{tea_pk_val}",
                     )
+                    have_already_new = st.checkbox("Have already", value=bool(row.iloc[0].get("have_already", False)), key=f"edit_tea_have_{tea_pk_val}")
+                    to_buy_new = st.checkbox("To buy", value=bool(row.iloc[0].get("to_buy", False)), key=f"edit_tea_tobuy_{tea_pk_val}")
                 with colB:
                     cultivar_new = st.text_input("Cultivar", value=str(row.iloc[0].get("cultivar", "") or ""))
                     region_new = st.text_input("Region", value=str(row.iloc[0].get("region", "") or ""))
                     pick_year_new = st.text_input("Pick year", value=str(row.iloc[0].get("pick_year", "") or ""))
-                    oxidation_new = st.text_input("Oxidation", value=str(row.iloc[0].get("oxidation", "") or ""))
-                    roasting_new = st.selectbox("Roasting", options=roast_options, index=roast_idx, key=f"edit_tea_roasting_{tea_pk_val}")
-                    elevation_m_new = st.text_input(
-                        "Elevation (m)",
-                        value=str(row.iloc[0].get("elevation_m", "") or ""),
-                        key=f"edit_tea_elevation_m_{tea_pk_val}",
-                    )
                     picking_season_new = st.text_input(
                         "Picking season",
                         value=str(row.iloc[0].get("picking_season", "") or ""),
@@ -458,6 +446,11 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         index=buy_again_idx,
                         key=f"edit_tea_buy_again_{tea_pk_val}",
                     )
+                    price_1_new = st.text_input("Price 1 (NZD)", value=str(row.iloc[0].get("price_1_nzd", "") or ""))
+                    weight_1_new = st.text_input("Weight 1 (g)", value=str(row.iloc[0].get("weight_1_g", "") or ""))
+                    price_2_new = st.text_input("Price 2 (NZD)", value=str(row.iloc[0].get("price_2_nzd", "") or ""))
+                    weight_2_new = st.text_input("Weight 2 (g)", value=str(row.iloc[0].get("weight_2_g", "") or ""))
+                    wps_new = st.text_input("Weight per session (g)", value=str(row.iloc[0].get("weight_per_session_g", "") or ""))
 
                 save_btn = st.button("Save changes", type="primary", key=f"edit_tea_save_{tea_pk_val}")
                 if save_btn:
@@ -474,20 +467,18 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "cultivar": (cultivar_new.strip() or None),
                             "region": (region_new.strip() or None),
                             "pick_year": safe_int(pick_year_new),
-                            "oxidation": (oxidation_new.strip() or None),
-                            "roasting": (roasting_new.strip() or None),
-                            "processing_notes": (processing_notes_new.strip() or None)
-                            if isinstance(processing_notes_new, str)
-                            else None,
-                            "elevation_m": (elevation_m_new.strip() or None),
-                            "picking_season": (picking_season_new.strip() or None)
-                            if isinstance(picking_season_new, str)
-                            else None,
-                            "buy_again": buy_again_to_save,  # ← write only this
+                            "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
+                            "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
+                            "buy_again": buy_again_to_save,
+                            "have_already": bool(have_already_new),
+                            "to_buy": bool(to_buy_new),
+                            "price_1_nzd": safe_float(price_1_new),
+                            "weight_1_g": safe_float(weight_1_new),
+                            "price_2_nzd": safe_float(price_2_new),
+                            "weight_2_g": safe_float(weight_2_new),
+                            "weight_per_session_g": safe_float(wps_new),
                         }
                         allowed = set(teas_df.columns)
-                        if "buy_again" not in allowed:
-                            st.warning("Your 'teas' table doesn’t have a 'buy_again' column yet. This field won’t be saved.")
                         payload = {k: _json_sanitize(v) for k, v in payload.items() if k in allowed}
                         try:
                             SUPABASE.table("teas").update(payload).eq(tea_pk, tea_pk_val).execute()  # type: ignore
@@ -502,16 +493,15 @@ elif st.session_state.active_tab == "📜 Steep history":
     # Join steeps to teas to show tea meta
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
+        keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "region", "cultivar"] if c in teas_df.columns]
         joined = steeps_df.merge(
-            teas_df.rename(columns={teas_key: "tea_id"})[
-                ["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]
-            ],
+            teas_df.rename(columns={teas_key: "tea_id"})[keep_cols],
             on="tea_id",
             how="left",
         )
     else:
         joined = steeps_df.copy()
-        for col in ["name", "type", "supplier", "region", "cultivar", "roasting"]:
+        for col in ["name", "type", "supplier", "region", "cultivar"]:
             if col not in joined.columns:
                 joined[col] = None
 
@@ -563,14 +553,14 @@ elif st.session_state.active_tab == "📜 Steep history":
                     "tasting_notes", "steep_notes",
                     "initial_steep_time_sec", "steep_time_changes",
                     "temperature_c", "amount_used_g",
-                    "type", "supplier", "region", "cultivar", "roasting",
+                    "type", "supplier", "region", "cultivar",
                 ]
                 present_cols = [c for c in display_cols if c in rows.columns]
                 rows = rows[present_cols].copy()
 
                 st.session_state["orig_steeps_df"] = rows.copy()
 
-                readonly_cols = ["type", "supplier", "region", "cultivar", "roasting"]
+                readonly_cols = ["type", "supplier", "region", "cultivar"]
                 col_conf = {}
                 for c in present_cols:
                     if c in readonly_cols:
@@ -616,15 +606,14 @@ elif st.session_state.active_tab == "📊 Analysis":
 
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
+        keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "region", "cultivar"] if c in teas_df.columns]
         joined = steeps_df.merge(
-            teas_df.rename(columns={teas_key: "tea_id"})[
-                ["tea_id", "name", "type", "supplier", "region", "cultivar", "roasting"]
-            ],
+            teas_df.rename(columns={teas_key: "tea_id"})[keep_cols],
             on="tea_id", how="left",
         )
     else:
         joined = steeps_df.copy()
-        for col in ["name", "type", "supplier", "region", "cultivar", "roasting"]:
+        for col in ["name", "type", "supplier", "region", "cultivar"]:
             if col not in joined.columns:
                 joined[col] = None
 
@@ -648,7 +637,6 @@ elif st.session_state.active_tab == "📊 Analysis":
     scope_df = joined[scope_mask].copy()
 
     st.markdown("### Box & whisker by tea")
-    # Chart uses rating as 0–5 as per your UI; adjust axis label if needed
     def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
         if df is None or len(df) == 0 or "name" not in df.columns or "rating" not in df.columns:
             st.info("No ratings to chart yet."); return

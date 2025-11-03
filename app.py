@@ -452,6 +452,16 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                     weight_2_new = st.text_input("Weight 2 (g)", value=str(row.iloc[0].get("weight_2_g", "") or ""))
                     wps_new = st.text_input("Weight per session (g)", value=str(row.iloc[0].get("weight_per_session_g", "") or ""))
 
+                    # NEW: per-session prices
+                    pps1_new = st.text_input(
+                        "Price per session 1 (NZD)",
+                        value=str(row.iloc[0].get("price_per_session_1_nzd", "") or "")
+                    )
+                    pps2_new = st.text_input(
+                        "Price per session 2 (NZD)",
+                        value=str(row.iloc[0].get("price_per_session_2_nzd", "") or "")
+                    )
+
                 save_btn = st.button("Save changes", type="primary", key=f"edit_tea_save_{tea_pk_val}")
                 if save_btn:
                     if SUPABASE is None:
@@ -477,6 +487,10 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "price_2_nzd": safe_float(price_2_new),
                             "weight_2_g": safe_float(weight_2_new),
                             "weight_per_session_g": safe_float(wps_new),
+
+                            # NEW fields:
+                            "price_per_session_1_nzd": safe_float(pps1_new),
+                            "price_per_session_2_nzd": safe_float(pps2_new),
                         }
                         allowed = set(teas_df.columns)
                         payload = {k: _json_sanitize(v) for k, v in payload.items() if k in allowed}

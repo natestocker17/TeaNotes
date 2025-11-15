@@ -1,5 +1,5 @@
 # =========================
-# Tea Notes (Steeps) — UI updated for new Supabase schema (no buy_again)
+# Tea Notes (Steeps) — UI updated for new Supabase schema
 # =========================
 
 import os
@@ -250,6 +250,7 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 st.title("🍵 Tea Notes — Sessions & Scores")
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
+TO_BUY_OPTIONS = ["No", "Maybe", "Yes"]
 
 # -------------------- Nav --------------------
 NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history", "📊 Analysis"]
@@ -323,7 +324,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
         url = st.text_input("URL", key="add_tea_url")
         processing_notes = st.text_area("Processing notes", key="add_tea_processing_notes")
         have_already_cb = st.checkbox("Have already", value=False, key="add_tea_have_already")
-        to_buy_cb = st.checkbox("To buy", value=False, key="add_tea_to_buy")
+        to_buy_sel = st.selectbox("To buy", options=TO_BUY_OPTIONS, index=0, key="add_tea_to_buy")
     with colB:
         cultivar_sel = st.selectbox("Cultivar", options=[""] + cultivar_opts, index=0, key="add_tea_cultivar_sel")
         cultivar_new = st.text_input("Or add new Cultivar", key="add_tea_cultivar_new")
@@ -366,7 +367,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "processing_notes": processing_notes_val,
                 "picking_season": picking_season_val,
                 "have_already": bool(have_already_cb),
-                "to_buy": bool(to_buy_cb),
+                "to_buy": to_buy_sel,  # "No", "Maybe", "Yes"
                 "price_1_nzd": safe_float(price_1),
                 "weight_1_g": safe_float(weight_1),
                 "price_2_nzd": safe_float(price_2),
@@ -409,6 +410,15 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 type_options = [""] + TEA_TYPES
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
 
+                # Map existing to_buy value (bool or string) into tri-state options
+                raw_to_buy = row.iloc[0].get("to_buy", "No")
+                if isinstance(raw_to_buy, bool):
+                    current_to_buy = "Yes" if raw_to_buy else "No"
+                else:
+                    raw_str = str(raw_to_buy).strip().title()
+                    current_to_buy = raw_str if raw_str in TO_BUY_OPTIONS else "No"
+                to_buy_idx = safe_index(TO_BUY_OPTIONS, current_to_buy, default=0)
+
                 colA, colB = st.columns(2)
                 with colA:
                     name_new = st.text_input("Tea name", value=str(row.iloc[0].get("name", "") or ""))
@@ -421,8 +431,17 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         value=str(row.iloc[0].get("processing_notes", "") or ""),
                         key=f"edit_tea_processing_notes_{tea_pk_val}",
                     )
-                    have_already_new = st.checkbox("Have already", value=bool(row.iloc[0].get("have_already", False)), key=f"edit_tea_have_{tea_pk_val}")
-                    to_buy_new = st.checkbox("To buy", value=bool(row.iloc[0].get("to_buy", False)), key=f"edit_tea_tobuy_{tea_pk_val}")
+                    have_already_new = st.checkbox(
+                        "Have already",
+                        value=bool(row.iloc[0].get("have_already", False)),
+                        key=f"edit_tea_have_{tea_pk_val}",
+                    )
+                    to_buy_new = st.selectbox(
+                        "To buy",
+                        options=TO_BUY_OPTIONS,
+                        index=to_buy_idx,
+                        key=f"edit_tea_tobuy_{tea_pk_val}",
+                    )
                 with colB:
                     cultivar_new = st.text_input("Cultivar", value=str(row.iloc[0].get("cultivar", "") or ""))
                     region_new = st.text_input("Region", value=str(row.iloc[0].get("region", "") or ""))
@@ -462,10 +481,12 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "cultivar": (cultivar_new.strip() or None),
                             "region": (region_new.strip() or None),
                             "pick_year": safe_int(pick_year_new),
-                            "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
-                            "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
+                            "processing_notes": (processing_notes_new.strip() or None)
+                                if isinstance(processing_notes_new, str) else None,
+                            "picking_season": (picking_season_new.strip() or None)
+                                if isinstance(picking_season_new, str) else None,
                             "have_already": bool(have_already_new),
-                            "to_buy": bool(to_buy_new),
+                            "to_buy": to_buy_new,  # "No", "Maybe", "Yes"
                             "price_1_nzd": safe_float(price_1_new),
                             "weight_1_g": safe_float(weight_1_new),
                             "price_2_nzd": safe_float(price_2_new),

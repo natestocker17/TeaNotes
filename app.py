@@ -1,5 +1,5 @@
 # =========================
-# Tea Notes (Steeps) — UI updated for new Supabase schema
+# Tea Notes (Steeps) — UI updated for new Supabase schema (no buy_again)
 # =========================
 
 import os
@@ -250,7 +250,6 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 st.title("🍵 Tea Notes — Sessions & Scores")
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
-BUY_AGAIN_OPTIONS = ["Unstated", "Maybe", "No", "Yes", "Definitely"]
 
 # -------------------- Nav --------------------
 NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history", "📊 Analysis"]
@@ -332,7 +331,6 @@ elif st.session_state.active_tab == "➕ Add Tea":
         region_new = st.text_input("Or add new Region", key="add_tea_region_new")
         pick_year_txt = st.text_input("Pick year", value="", key="add_tea_pick_year")
         picking_season = st.text_input("Picking season", key="add_tea_picking_season")
-        buy_again_sel = st.selectbox("Buy again", options=BUY_AGAIN_OPTIONS, index=0, key="add_tea_buy_again")
         st.markdown("**Pricing / weights (NZD & grams)**")
         price_1 = st.text_input("Price 1 (NZD)", value="", key="add_tea_price1")
         weight_1 = st.text_input("Weight 1 (g)", value="", key="add_tea_weight1")
@@ -348,7 +346,6 @@ elif st.session_state.active_tab == "➕ Add Tea":
     tea_type_val = tea_type.strip() or None
     processing_notes_val = (processing_notes.strip() or None) if isinstance(processing_notes, str) else None
     picking_season_val = (picking_season.strip() or None) if isinstance(picking_season, str) else None
-    buy_again_val = None if buy_again_sel == "Unstated" else buy_again_sel
 
     add_tea_btn = st.button("Save Tea", type="primary", use_container_width=True, key="add_tea_save")
     if add_tea_btn:
@@ -368,7 +365,6 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "pick_year": pick_year,
                 "processing_notes": processing_notes_val,
                 "picking_season": picking_season_val,
-                "buy_again": buy_again_val,
                 "have_already": bool(have_already_cb),
                 "to_buy": bool(to_buy_cb),
                 "price_1_nzd": safe_float(price_1),
@@ -413,10 +409,6 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 type_options = [""] + TEA_TYPES
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
 
-                # Current buy_again
-                current_buy_again = row.iloc[0].get("buy_again", None)
-                buy_again_idx = safe_index(BUY_AGAIN_OPTIONS, current_buy_again, default=0)
-
                 colA, colB = st.columns(2)
                 with colA:
                     name_new = st.text_input("Tea name", value=str(row.iloc[0].get("name", "") or ""))
@@ -440,12 +432,6 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         value=str(row.iloc[0].get("picking_season", "") or ""),
                         key=f"edit_tea_picking_season_{tea_pk_val}",
                     )
-                    buy_again_new_sel = st.selectbox(
-                        "Buy again",
-                        options=BUY_AGAIN_OPTIONS,
-                        index=buy_again_idx,
-                        key=f"edit_tea_buy_again_{tea_pk_val}",
-                    )
                     price_1_new = st.text_input("Price 1 (NZD)", value=str(row.iloc[0].get("price_1_nzd", "") or ""))
                     weight_1_new = st.text_input("Weight 1 (g)", value=str(row.iloc[0].get("weight_1_g", "") or ""))
                     price_2_new = st.text_input("Price 2 (NZD)", value=str(row.iloc[0].get("price_2_nzd", "") or ""))
@@ -467,7 +453,6 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                     if SUPABASE is None:
                         st.error("Database is not configured.")
                     else:
-                        buy_again_to_save = None if buy_again_new_sel == "Unstated" else buy_again_new_sel
                         payload = {
                             "name": name_new.strip() or None,
                             "type": (type_new.strip() or None),
@@ -479,7 +464,6 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "pick_year": safe_int(pick_year_new),
                             "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
                             "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
-                            "buy_again": buy_again_to_save,
                             "have_already": bool(have_already_new),
                             "to_buy": bool(to_buy_new),
                             "price_1_nzd": safe_float(price_1_new),

@@ -314,7 +314,8 @@ elif st.session_state.active_tab == "➕ Add Tea":
     subtype_opts = options_from_column(teas_df, "subtype")
     supplier_opts_all = options_from_column(teas_df, "supplier")
     cultivar_opts = options_from_column(teas_df, "cultivar")
-    region_opts = options_from_column(teas_df, "region")
+    REGION_COMPONENT_COLS = ["country", "province", "prefecture", "county", "mountain", "village"]
+    loc_opts = {c: options_from_column(teas_df, c) for c in REGION_COMPONENT_COLS}
 
     with colA:
         tea_name = st.text_input("Tea name (required)", key="add_tea_name")
@@ -330,8 +331,22 @@ elif st.session_state.active_tab == "➕ Add Tea":
     with colB:
         cultivar_sel = st.selectbox("Cultivar", options=[""] + cultivar_opts, index=0, key="add_tea_cultivar_sel")
         cultivar_new = st.text_input("Or add new Cultivar", key="add_tea_cultivar_new")
-        region_sel = st.selectbox("Region", options=[""] + region_opts, index=0, key="add_tea_region_sel")
-        region_new = st.text_input("Or add new Region", key="add_tea_region_new")
+        with st.expander("Location", expanded=True):
+            l1, l2 = st.columns(2)
+            with l1:
+                country_sel = st.selectbox("Country", options=[""] + loc_opts["country"], index=0, key="add_tea_country_sel")
+                country_new = st.text_input("Or add new Country", key="add_tea_country_new")
+                province_sel = st.selectbox("Province / state", options=[""] + loc_opts["province"], index=0, key="add_tea_province_sel")
+                province_new = st.text_input("Or add new Province / state", key="add_tea_province_new")
+                prefecture_sel = st.selectbox("Prefecture / city", options=[""] + loc_opts["prefecture"], index=0, key="add_tea_prefecture_sel")
+                prefecture_new = st.text_input("Or add new Prefecture / city", key="add_tea_prefecture_new")
+            with l2:
+                county_sel = st.selectbox("County / district", options=[""] + loc_opts["county"], index=0, key="add_tea_county_sel")
+                county_new = st.text_input("Or add new County / district", key="add_tea_county_new")
+                mountain_sel = st.selectbox("Mountain", options=[""] + loc_opts["mountain"], index=0, key="add_tea_mountain_sel")
+                mountain_new = st.text_input("Or add new Mountain", key="add_tea_mountain_new")
+                village_sel = st.selectbox("Village", options=[""] + loc_opts["village"], index=0, key="add_tea_village_sel")
+                village_new = st.text_input("Or add new Village", key="add_tea_village_new")
         pick_year_txt = st.text_input("Pick year", value="", key="add_tea_pick_year")
         picking_season = st.text_input("Picking season", key="add_tea_picking_season")
         st.markdown("**Pricing / weights (NZD & grams)**")
@@ -344,7 +359,12 @@ elif st.session_state.active_tab == "➕ Add Tea":
     subtype = (subtype_new.strip() or subtype_sel.strip() or None)
     supplier = (supplier_new.strip() or supplier_sel.strip() or None)
     cultivar = (cultivar_new.strip() or cultivar_sel.strip() or None)
-    region = (region_new.strip() or region_sel.strip() or None)
+    country = (country_new.strip() or country_sel.strip() or None)
+    province = (province_new.strip() or province_sel.strip() or None)
+    prefecture = (prefecture_new.strip() or prefecture_sel.strip() or None)
+    county = (county_new.strip() or county_sel.strip() or None)
+    mountain = (mountain_new.strip() or mountain_sel.strip() or None)
+    village = (village_new.strip() or village_sel.strip() or None)
     pick_year = safe_int(pick_year_txt) if pick_year_txt else None
     tea_type_val = tea_type.strip() or None
     processing_notes_val = (processing_notes.strip() or None) if isinstance(processing_notes, str) else None
@@ -364,7 +384,12 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "supplier": supplier,
                 "URL": (url.strip() or None),
                 "cultivar": cultivar,
-                "region": region,
+                "country": country,
+                "province": province,
+                "prefecture": prefecture,
+                "county": county,
+                "mountain": mountain,
+                "village": village,
                 "pick_year": pick_year,
                 "processing_notes": processing_notes_val,
                 "picking_season": picking_season_val,
@@ -446,7 +471,13 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                     )
                 with colB:
                     cultivar_new = st.text_input("Cultivar", value=str(row.iloc[0].get("cultivar", "") or ""))
-                    region_new = st.text_input("Region", value=str(row.iloc[0].get("region", "") or ""))
+                    st.markdown("**Location**")
+                    country_new = st.text_input("Country", value=str(row.iloc[0].get("country", "") or ""))
+                    province_new = st.text_input("Province / state", value=str(row.iloc[0].get("province", "") or ""))
+                    prefecture_new = st.text_input("Prefecture / city", value=str(row.iloc[0].get("prefecture", "") or ""))
+                    county_new = st.text_input("County / district", value=str(row.iloc[0].get("county", "") or ""))
+                    mountain_new = st.text_input("Mountain", value=str(row.iloc[0].get("mountain", "") or ""))
+                    village_new = st.text_input("Village", value=str(row.iloc[0].get("village", "") or ""))
                     pick_year_new = st.text_input("Pick year", value=str(row.iloc[0].get("pick_year", "") or ""))
                     picking_season_new = st.text_input(
                         "Picking season",
@@ -481,7 +512,12 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "supplier": (supplier_new.strip() or None),
                             "URL": (url_new.strip() or None),
                             "cultivar": (cultivar_new.strip() or None),
-                            "region": (region_new.strip() or None),
+                            "country": (country_new.strip() or None),
+                            "province": (province_new.strip() or None),
+                            "prefecture": (prefecture_new.strip() or None),
+                            "county": (county_new.strip() or None),
+                            "mountain": (mountain_new.strip() or None),
+                            "village": (village_new.strip() or None),
                             "pick_year": safe_int(pick_year_new),
                             "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
                             "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
@@ -510,7 +546,7 @@ elif st.session_state.active_tab == "📜 Steep history":
     # Join steeps to teas to show tea meta
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
-        keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "region", "cultivar"] if c in teas_df.columns]
+        keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"] if c in teas_df.columns]
         joined = steeps_df.merge(
             teas_df.rename(columns={teas_key: "tea_id"})[keep_cols],
             on="tea_id",
@@ -518,7 +554,7 @@ elif st.session_state.active_tab == "📜 Steep history":
         )
     else:
         joined = steeps_df.copy()
-        for col in ["name", "type", "supplier", "region", "cultivar"]:
+        for col in ["name", "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"]:
             if col not in joined.columns:
                 joined[col] = None
 
@@ -570,14 +606,14 @@ elif st.session_state.active_tab == "📜 Steep history":
                     "tasting_notes", "steep_notes",
                     "initial_steep_time_sec", "steep_time_changes",
                     "temperature_c", "amount_used_g",
-                    "type", "supplier", "region", "cultivar",
+                    "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village",
                 ]
                 present_cols = [c for c in display_cols if c in rows.columns]
                 rows = rows[present_cols].copy()
 
                 st.session_state["orig_steeps_df"] = rows.copy()
 
-                readonly_cols = ["type", "supplier", "region", "cultivar"]
+                readonly_cols = ["type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"]
                 col_conf = {}
                 for c in present_cols:
                     if c in readonly_cols:
@@ -624,14 +660,14 @@ elif st.session_state.active_tab == "📊 Analysis":
 
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
-        keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "region", "cultivar"] if c in teas_df.columns]
+        keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"] if c in teas_df.columns]
         joined = steeps_df.merge(
             teas_df.rename(columns={teas_key: "tea_id"})[keep_cols],
             on="tea_id", how="left",
         )
     else:
         joined = steeps_df.copy()
-        for col in ["name", "type", "supplier", "region", "cultivar"]:
+        for col in ["name", "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"]:
             if col not in joined.columns:
                 joined[col] = None
 

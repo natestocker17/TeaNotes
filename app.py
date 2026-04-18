@@ -1,9 +1,3 @@
-# =========================
-# Tea Notes (Steeps) — UI updated for new Supabase schema
-#   - buy_again removed
-#   - to_buy is tri-state: "No" / "Maybe" / "Yes"
-# =========================
-
 import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -252,7 +246,7 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 st.title("🍵 Tea Notes — Sessions & Scores")
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
-TO_BUY_OPTIONS = ["No", "Maybe", "Yes"]
+TO_BUY_OPTIONS = ["Yes", "No", "Maybe", "Wishlist"]
 
 # -------------------- Nav --------------------
 NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history"]
@@ -449,8 +443,9 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                 type_options = [""] + TEA_TYPES
                 type_idx = safe_index(type_options, row.iloc[0].get("type", ""))
 
-                # Map existing to_buy value (bool or string) into tri-state options
+                # Map existing to_buy value (bool or string) into options
                 raw_to_buy = row.iloc[0].get("to_buy", "No")
+                
                 if isinstance(raw_to_buy, bool):
                     current_to_buy = "Yes" if raw_to_buy else "No"
                 else:

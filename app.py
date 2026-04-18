@@ -275,11 +275,27 @@ if st.session_state.active_tab == "📝 Add Session":
     if tea_selected != "(select)" and "name" in teas_df.columns:
         tea_selected_row = teas_df[teas_df["name"] == tea_selected].head(1)
     tea_id = None
+    selected_tea_pk = None
+    current_to_buy = "No"
     if tea_selected_row is not None and not tea_selected_row.empty:
-        tea_id = tea_selected_row.iloc[0].get("tea_id") or tea_selected_row.iloc[0].get("id")
+        selected_tea_pk = tea_selected_row.iloc[0].get("tea_id") or tea_selected_row.iloc[0].get("id")
+        tea_id = selected_tea_pk
+        raw_to_buy = tea_selected_row.iloc[0].get("to_buy", "No")
+        if isinstance(raw_to_buy, bool):
+            current_to_buy = "Yes" if raw_to_buy else "No"
+        else:
+            raw_str = str(raw_to_buy).strip().title()
+            current_to_buy = raw_str if raw_str in TO_BUY_OPTIONS else "No"
 
     tasting_notes = st.text_area("Tasting notes", value="", key="add_sess_tnotes")
     overall_rating_txt = st.text_input("Overall rating (0–5)", value="", key="add_sess_rating")
+    add_session_to_buy = st.selectbox(
+        "To buy",
+        options=TO_BUY_OPTIONS,
+        index=safe_index(TO_BUY_OPTIONS, current_to_buy, default=1),
+        key=f"add_sess_to_buy_{selected_tea_pk or 'none'}",
+        disabled=(tea_selected == "(select)")
+    )
 
     with st.expander("More session details", expanded=False):
         initial_secs_txt = st.text_input("Initial steep time (seconds)", value="", key="add_sess_initial_secs")
@@ -308,8 +324,11 @@ if st.session_state.active_tab == "📝 Add Session":
                 "session_at": datetime.utcnow().isoformat(),
             }
             try:
+                if selected_tea_pk is not None and "to_buy" in teas_df.columns:
+                    SUPABASE.table("teas").update({"to_buy": add_session_to_buy}).eq("tea_id" if "tea_id" in teas_df.columns else "id", selected_tea_pk).execute()  # type: ignore
                 SUPABASE.table("steeps").insert(row).execute()  # type: ignore
                 st.success("Saved.")
+                st.cache_data.clear()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 

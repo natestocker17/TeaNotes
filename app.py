@@ -1,3 +1,9 @@
+# =========================
+# Tea Notes (Steeps) — UI updated for new Supabase schema
+#   - buy_again removed
+#   - to_buy is tri-state: "No" / "Maybe" / "Yes"
+# =========================
+
 import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -249,7 +255,7 @@ TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
 TO_BUY_OPTIONS = ["No", "Maybe", "Yes"]
 
 # -------------------- Nav --------------------
-NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history", "📊 Analysis"]
+NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history"]
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = NAV_ITEMS[0]
 
@@ -269,13 +275,15 @@ if st.session_state.active_tab == "📝 Add Session":
     if tea_selected_row is not None and not tea_selected_row.empty:
         tea_id = tea_selected_row.iloc[0].get("tea_id") or tea_selected_row.iloc[0].get("id")
 
-    initial_secs_txt = st.text_input("Initial steep time (seconds)", value="", key="add_sess_initial_secs")
-    changes_text = st.text_input("Steep time changes", value="", key="add_sess_changes")
-    temperature_c_txt = st.text_input("Water temperature (°C)", value="", key="add_sess_temp")
-    amount_used_g_txt = st.text_input("Tea amount used (g)", value="", key="add_sess_amount")
     tasting_notes = st.text_area("Tasting notes", value="", key="add_sess_tnotes")
-    steep_notes = st.text_area("Steep notes", value="", key="add_sess_snotes")
     overall_rating_txt = st.text_input("Overall rating (0–5)", value="", key="add_sess_rating")
+
+    with st.expander("More session details", expanded=False):
+        initial_secs_txt = st.text_input("Initial steep time (seconds)", value="", key="add_sess_initial_secs")
+        changes_text = st.text_input("Steep time changes", value="", key="add_sess_changes")
+        temperature_c_txt = st.text_input("Water temperature (°C)", value="", key="add_sess_temp")
+        amount_used_g_txt = st.text_input("Tea amount used (g)", value="", key="add_sess_amount")
+        steep_notes = st.text_area("Steep notes", value="", key="add_sess_snotes")
 
     save_session_btn = st.button("Save Session", type="primary", use_container_width=True, key="add_sess_save")
     if save_session_btn:
@@ -546,30 +554,23 @@ elif st.session_state.active_tab == "📜 Steep history":
     joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
     joined = joined.sort_values("session_at", ascending=False)
 
-    st.markdown("### Recent steeps")
-    recent_left, recent_right = st.columns([1, 1])
-    with recent_left:
-        recent_n = st.selectbox("Show last N", options=[10, 20, 50, 100], index=1, key="recent_steeps_n")
-    with recent_right:
-        tea_names_for_sel = teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
+    tea_names_for_sel = teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
     tea_names = tea_names_for_sel[tea_names_for_sel != ""].unique().tolist() if not teas_df.empty else []
     tea_names_sorted = sorted(tea_names)
 
     selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
 
-    only_selected = False
-    if selected_tea != "(select a tea)":
-        only_selected = st.checkbox("Only show selected tea in recent steeps", value=False, key=f"recent_only_{selected_tea}")
-
+    st.markdown("### Steeps")
     recent_df = joined.copy()
-    if only_selected and selected_tea != "(select a tea)":
+    if selected_tea != "(select a tea)":
         recent_df = recent_df[recent_df["name"] == selected_tea]
+
     recent_cols = [c for c in [
-        "session_at","name","rating","tasting_notes","steep_notes",
-        "initial_steep_time_sec","temperature_c","amount_used_g","supplier","type"
+        "session_at", "name", "rating", "tasting_notes", "steep_notes",
+        "initial_steep_time_sec", "temperature_c", "amount_used_g", "supplier", "type"
     ] if c in recent_df.columns]
     st.dataframe(
-        recent_df.sort_values("session_at", ascending=False)[recent_cols].head(recent_n),
+        recent_df.sort_values("session_at", ascending=False)[recent_cols],
         use_container_width=True,
     )
 
@@ -624,8 +625,8 @@ elif st.session_state.active_tab == "📜 Steep history":
                     else:
                         orig = st.session_state.get("orig_steeps_df", rows)
                         editable_cols = [
-                            "session_at","rating","tasting_notes","steep_notes",
-                            "initial_steep_time_sec","steep_time_changes","temperature_c","amount_used_g",
+                            "session_at", "rating", "tasting_notes", "steep_notes",
+                            "initial_steep_time_sec", "steep_time_changes", "temperature_c", "amount_used_g",
                         ]
                         changed = diff_rows(orig, edited, steep_pk, editable_cols)
                         if changed.empty:
@@ -639,73 +640,3 @@ elif st.session_state.active_tab == "📜 Steep history":
                             else:
                                 st.success(f"Saved {len(payloads)} change(s).")
                                 st.cache_data.clear()
-
-elif st.session_state.active_tab == "📊 Analysis":
-    st.subheader("📊 Analysis")
-
-    if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
-        teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
-        keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"] if c in teas_df.columns]
-        joined = steeps_df.merge(
-            teas_df.rename(columns={teas_key: "tea_id"})[keep_cols],
-            on="tea_id", how="left",
-        )
-    else:
-        joined = steeps_df.copy()
-        for col in ["name", "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"]:
-            if col not in joined.columns:
-                joined[col] = None
-
-    joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
-
-    left, right = st.columns([1, 1])
-    with left:
-        tea_type_filter = st.selectbox("Tea type", options=["(all)"] + TEA_TYPES, index=0, key="analysis_type")
-    with right:
-        supplier_opts = sorted(
-            teas_df.get("supplier", pd.Series(dtype=str))
-            .dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
-        )
-        supplier_filter = st.selectbox("Supplier", options=["(all)"] + supplier_opts, index=0, key="analysis_supplier")
-
-    scope_mask = pd.Series(True, index=joined.index)
-    if tea_type_filter != "(all)":
-        scope_mask &= joined["type"].fillna("").str.lower() == tea_type_filter.lower()
-    if supplier_filter != "(all)":
-        scope_mask &= joined["supplier"].fillna("").str.lower() == supplier_filter.lower()
-    scope_df = joined[scope_mask].copy()
-
-    st.markdown("### Box & whisker by tea")
-
-    def plot_box_by_tea(df, title: str = "Tea ratings — box & whisker"):
-        if df is None or len(df) == 0 or "name" not in df.columns or "rating" not in df.columns:
-            st.info("No ratings to chart yet.")
-            return
-        working = df.copy()
-        working["rating"] = pd.to_numeric(working["rating"], errors="coerce")
-        for col in ["supplier", "type", "session_at", "tasting_notes", "steep_notes"]:
-            if col not in working.columns:
-                working[col] = None
-        working = working.dropna(subset=["rating"]) if not working.empty else working
-        if working.empty:
-            st.info("No ratings to chart yet.")
-            return
-        medians = working.groupby("name")["rating"].median().sort_values(ascending=False)
-        fig = px.box(
-            working, x="name", y="rating", points="all",
-            hover_data=["supplier", "type", "session_at", "tasting_notes", "steep_notes"],
-            title=title, category_orders={"name": medians.index.tolist()}
-        )
-        fig.update_layout(
-            margin=dict(l=12, r=12, t=48, b=12),
-            xaxis_title="Tea", yaxis_title="Rating", hovermode="closest"
-        )
-        fig.update_yaxes(range=[0, 5])
-        st.plotly_chart(fig, use_container_width=True)
-
-    plot_box_by_tea(scope_df)
-
-    with st.expander("View data used in chart"):
-        show_cols = ["name", "rating", "supplier", "type", "session_at", "tasting_notes", "steep_notes"]
-        present_cols = [c for c in show_cols if c in scope_df.columns]
-        st.data_editor(scope_df[present_cols].sort_values("name"), use_container_width=True, disabled=True)

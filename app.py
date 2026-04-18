@@ -266,7 +266,16 @@ st.session_state.active_tab = st.radio(
 
 # -------------------- Screens --------------------
 if st.session_state.active_tab == "📝 Add Session":
-    tea_choices = ["(select)"] + teas_df.get("name", pd.Series(dtype=str)).fillna("(unnamed)").tolist()
+    
+    tea_names = (
+    teas_df.get("name", pd.Series(dtype=str))
+    .dropna()
+    .astype(str)
+    .str.strip()
+)
+    tea_names = tea_names[tea_names != ""].unique().tolist()
+    tea_choices = ["(select)"] + sorted(tea_names, key=lambda x: x.lower())
+
     tea_selected = st.selectbox("Tea", tea_choices, index=0, key="add_sess_tea")
     tea_selected_row = None
     if tea_selected != "(select)" and "name" in teas_df.columns:

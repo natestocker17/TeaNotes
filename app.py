@@ -80,6 +80,50 @@ def safe_float(text: str) -> Optional[float]:
         return None
 
 
+def to_int_or_none(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+    try:
+        return int(round(float(value)))
+    except Exception:
+        return None
+
+
+def to_decimal_or_none(value: Any, decimals: int = 2) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+    try:
+        return round(float(value), decimals)
+    except Exception:
+        return None
+
+
+def build_tea_payload(raw: Dict[str, Any], allowed_cols: set[str]) -> Dict[str, Any]:
+    int_cols = {"pick_year", "weight_1_g", "weight_2_g", "weight_per_session_g"}
+    decimal_cols = {"price_1_nzd", "price_2_nzd"}
+    excluded_cols = {"sessions_1", "sessions_2", "price_per_session_1_nzd", "price_per_session_2_nzd"}
+
+    payload: Dict[str, Any] = {}
+    for k, v in raw.items():
+        if k not in allowed_cols or k in excluded_cols:
+            continue
+        if k in int_cols:
+            payload[k] = to_int_or_none(v)
+        elif k in decimal_cols:
+            payload[k] = to_decimal_or_none(v, 2)
+        else:
+            payload[k] = _json_sanitize(v)
+    return payload
+
+
 def safe_index(options: List[str], value: Any, default: int = 0) -> int:
     if value is None:
         return default
@@ -427,8 +471,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "created_at": datetime.utcnow().isoformat(),
             }
             allowed = set(teas_df.columns)
-            excluded_tea_cols = {"sessions_1", "sessions_2", "price_per_session_1_nzd", "price_per_session_2_nzd"}
-            tea_row = {k: _json_sanitize(v) for k, v in tea_row.items() if k in allowed and k not in excluded_tea_cols}
+            tea_row = build_tea_payload(tea_row, allowed)
             try:
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
                 st.success("Saved.")
@@ -547,8 +590,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "weight_per_session_g": safe_float(wps_new),
                         }
                         allowed = set(teas_df.columns)
-                        excluded_tea_cols = {"sessions_1", "sessions_2", "price_per_session_1_nzd", "price_per_session_2_nzd"}
-                        payload = {k: _json_sanitize(v) for k, v in payload.items() if k in allowed and k not in excluded_tea_cols}
+                        payload = build_tea_payload(payload, allowed)
                         try:
                             SUPABASE.table("teas").update(payload).eq(tea_pk, tea_pk_val).execute()  # type: ignore
                             st.success("Tea updated.")

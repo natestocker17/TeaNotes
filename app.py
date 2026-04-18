@@ -536,7 +536,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
 elif st.session_state.active_tab == "📜 Steep history":
     st.subheader("📜 Steep history")
 
-    # Join steeps to teas to show tea meta
+    # Join steeps to teas
     if "tea_id" in steeps_df.columns and ("tea_id" in teas_df.columns or "id" in teas_df.columns):
         teas_key = "tea_id" if "tea_id" in teas_df.columns else "id"
         keep_cols = [c for c in ["tea_id", "name", "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"] if c in teas_df.columns]
@@ -554,40 +554,71 @@ elif st.session_state.active_tab == "📜 Steep history":
     joined["session_at"] = ensure_datetime(joined.get("session_at", pd.Series(dtype="datetime64[ns]")))
     joined = joined.sort_values("session_at", ascending=False)
 
+    # Tea selector
     tea_names_for_sel = teas_df.get("name", pd.Series(dtype=str)).dropna().astype(str).str.strip()
     tea_names = tea_names_for_sel[tea_names_for_sel != ""].unique().tolist() if not teas_df.empty else []
     tea_names_sorted = sorted(tea_names)
 
-    selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
+    selected_tea = st.selectbox(
+        "Find a tea",
+        options=["(select a tea)"] + tea_names_sorted,
+        index=0,
+        key="hist_select_tea"
+    )
 
-    st.markdown("### Steeps")
-
-    # Detailed table for selected tea (editable)
+    # -------------------------
+    # CASE 1: No tea selected → READ-ONLY TABLE
+    # -------------------------
     if selected_tea == "(select a tea)":
-        st.info("Select a tea above to view and edit its steeps.")
+        st.markdown("### All steeps")
+
+        cols = [c for c in [
+            "session_at", "name", "rating",
+            "tasting_notes", "steep_notes",
+            "initial_steep_time_sec", "temperature_c",
+            "amount_used_g", "supplier", "type"
+        ] if c in joined.columns]
+
+        st.dataframe(
+            joined[cols],
+            use_container_width=True
+        )
+
+    # -------------------------
+    # CASE 2: Tea selected → EDITABLE TABLE
+    # -------------------------
     else:
         rows = joined[joined["name"] == selected_tea].copy()
+
         if rows.empty:
             st.warning("No sessions found for this tea yet.")
         else:
             steep_pk = get_pk_column(rows, ["steep_id", "id"])
+
             if steep_pk is None:
-                st.warning("Could not determine the steep primary key column (expected 'steep_id' or 'id'). Editing is disabled.")
-                st.dataframe(rows.sort_values("session_at", ascending=False), use_container_width=True)
+                st.warning("Could not determine primary key. Editing disabled.")
+                st.dataframe(rows, use_container_width=True)
             else:
                 display_cols = [
                     steep_pk, "session_at", "rating",
                     "tasting_notes", "steep_notes",
                     "initial_steep_time_sec", "steep_time_changes",
                     "temperature_c", "amount_used_g",
-                    "type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village",
+                    "type", "supplier", "cultivar", "country",
+                    "province", "prefecture", "county", "mountain", "village",
                 ]
+
                 present_cols = [c for c in display_cols if c in rows.columns]
                 rows = rows[present_cols].copy()
 
                 st.session_state["orig_steeps_df"] = rows.copy()
 
-                readonly_cols = ["type", "supplier", "cultivar", "country", "province", "prefecture", "county", "mountain", "village"]
+                readonly_cols = [
+                    "type", "supplier", "cultivar",
+                    "country", "province", "prefecture",
+                    "county", "mountain", "village"
+                ]
+
                 col_conf = {}
                 for c in present_cols:
                     if c in readonly_cols:
@@ -598,30 +629,37 @@ elif st.session_state.active_tab == "📜 Steep history":
                         col_conf[c] = st.column_config.NumberColumn(c, step=0.1, format="%.2f")
                     elif c in ["initial_steep_time_sec", "temperature_c"]:
                         col_conf[c] = st.column_config.NumberColumn(c, step=1, format="%d")
-                    elif c == "session_at":
-                        col_conf[c] = st.column_config.Column(c)
                     elif c == steep_pk:
                         col_conf[c] = st.column_config.Column(c, disabled=True)
 
                 edited = st.data_editor(
-                    rows, key="steep_editor", use_container_width=True, hide_index=True, column_config=col_conf,
+                    rows,
+                    key="steep_editor",
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=col_conf,
                 )
 
-                if st.button("Save changes", type="primary", key="save_steeps_btn"):
+                if st.button("Save changes", type="primary"):
                     if SUPABASE is None:
                         st.error("Database is not configured.")
                     else:
                         orig = st.session_state.get("orig_steeps_df", rows)
+
                         editable_cols = [
                             "session_at", "rating", "tasting_notes", "steep_notes",
-                            "initial_steep_time_sec", "steep_time_changes", "temperature_c", "amount_used_g",
+                            "initial_steep_time_sec", "steep_time_changes",
+                            "temperature_c", "amount_used_g",
                         ]
+
                         changed = diff_rows(orig, edited, steep_pk, editable_cols)
+
                         if changed.empty:
                             st.info("No changes to save.")
                         else:
                             payloads = build_steep_payloads(changed, steep_pk)
                             errors = update_supabase_rows("steeps", steep_pk, payloads)
+
                             if errors:
                                 for e in errors:
                                     st.error(e)

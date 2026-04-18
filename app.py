@@ -561,18 +561,6 @@ elif st.session_state.active_tab == "📜 Steep history":
     selected_tea = st.selectbox("Find a tea", options=["(select a tea)"] + tea_names_sorted, index=0, key="hist_select_tea")
 
     st.markdown("### Steeps")
-    recent_df = joined.copy()
-    if selected_tea != "(select a tea)":
-        recent_df = recent_df[recent_df["name"] == selected_tea]
-
-    recent_cols = [c for c in [
-        "session_at", "name", "rating", "tasting_notes", "steep_notes",
-        "initial_steep_time_sec", "temperature_c", "amount_used_g", "supplier", "type"
-    ] if c in recent_df.columns]
-    st.dataframe(
-        recent_df.sort_values("session_at", ascending=False)[recent_cols],
-        use_container_width=True,
-    )
 
     # Detailed table for selected tea (editable)
     if selected_tea == "(select a tea)":

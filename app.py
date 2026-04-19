@@ -181,15 +181,21 @@ def diff_rows(original: pd.DataFrame, edited: pd.DataFrame, pk_col: str, editabl
     """Return only the edited rows that changed in editable columns."""
     if original.empty or edited.empty:
         return edited.iloc[0:0].copy()
+
     left = original.set_index(pk_col)
     right = edited.set_index(pk_col)
+
     cols = [c for c in editable_cols if c in left.columns and c in right.columns]
     if not cols:
         return edited.iloc[0:0].copy()
-    l = left[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
-    r = right[cols].applymap(lambda x: None if (isinstance(x, float) and np.isnan(x)) else x)
+
+    # Normalise missing values so NaN/NaT/None compare consistently without applymap.
+    l = left[cols].copy().astype(object).where(pd.notna(left[cols]), None)
+    r = right[cols].copy().astype(object).where(pd.notna(right[cols]), None)
+
     changed_mask = (l != r).any(axis=1)
     changed_idx = changed_mask[changed_mask].index
+
     return edited[edited[pk_col].isin(changed_idx)].copy()
 
 
@@ -731,3 +737,4 @@ elif st.session_state.active_tab == "📜 Steep history":
                             else:
                                 st.success(f"Saved {len(payloads)} change(s).")
                                 st.cache_data.clear()
+                                st.rerun()

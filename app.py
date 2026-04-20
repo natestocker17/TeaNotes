@@ -379,6 +379,8 @@ if st.session_state.active_tab == "📝 Add Session":
                 SUPABASE.table("steeps").insert(row).execute()  # type: ignore
                 st.success("Saved.")
                 st.cache_data.clear()
+                st.rerun()
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
@@ -482,6 +484,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
                 st.success("Saved.")
                 st.cache_data.clear()
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
@@ -601,6 +604,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             SUPABASE.table("teas").update(payload).eq(tea_pk, tea_pk_val).execute()  # type: ignore
                             st.success("Tea updated.")
                             st.cache_data.clear()
+                            st.rerun()
                         except Exception as e:
                             st.error(f"Failed to update: {e}")
 
@@ -737,4 +741,5 @@ elif st.session_state.active_tab == "📜 Steep history":
                             else:
                                 st.success(f"Saved {len(payloads)} change(s).")
                                 st.cache_data.clear()
+                                st.rerun()
                                 st.rerun()

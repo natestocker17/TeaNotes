@@ -189,7 +189,8 @@ def diff_rows(original: pd.DataFrame, edited: pd.DataFrame, pk_col: str, editabl
     if not cols:
         return edited.iloc[0:0].copy()
 
-    # Normalise missing values so NaN/NaT/None compare consistently without applymap.
+    # Normalise missing values so NaN/NaT/None compare consistently.
+    # This avoids DataFrame.applymap(), which is unavailable in newer pandas versions.
     l = left[cols].copy().astype(object).where(pd.notna(left[cols]), None)
     r = right[cols].copy().astype(object).where(pd.notna(right[cols]), None)
 
@@ -259,48 +260,6 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
     return payloads
 
 
-# -------------------- Form state helpers --------------------
-def clear_keys(keys: List[str]) -> None:
-    """Clear Streamlit widget values after a successful save."""
-    for key in keys:
-        if key in st.session_state:
-            st.session_state[key] = ""
-
-
-ADD_SESSION_CLEAR_KEYS = [
-    "add_sess_tnotes",
-    "add_sess_rating",
-    "add_sess_initial_secs",
-    "add_sess_changes",
-    "add_sess_temp",
-    "add_sess_amount",
-    "add_sess_snotes",
-]
-
-
-ADD_TEA_CLEAR_KEYS = [
-    "add_tea_name",
-    "add_tea_url",
-    "add_tea_processing_notes",
-    "add_tea_pick_year",
-    "add_tea_picking_season",
-    "add_tea_price1",
-    "add_tea_weight1",
-    "add_tea_price2",
-    "add_tea_weight2",
-    "add_tea_wps",
-    "add_tea_subtype_new",
-    "add_tea_supplier_new",
-    "add_tea_cultivar_new",
-    "add_tea_country_new",
-    "add_tea_province_new",
-    "add_tea_prefecture_new",
-    "add_tea_county_new",
-    "add_tea_mountain_new",
-    "add_tea_village_new",
-]
-
-
 # -------------------- Supabase + data --------------------
 SUPABASE = get_supabase()
 _db = load_data()
@@ -339,6 +298,39 @@ st.title("🍵 Tea Notes — Sessions & Scores")
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
 TO_BUY_OPTIONS = ["Yes", "No", "Maybe", "Wishlist"]
+
+
+def request_page_reset(success_message: str, *, exact_keys: Optional[List[str]] = None, prefixes: Optional[List[str]] = None) -> None:
+    """Clear selected widget state on the next run, then show a success message.
+
+    Streamlit does not allow changing a widget's session_state value after that
+    widget has already been instantiated in the current run. To avoid that, save
+    the keys/prefixes now, rerun, and clear them before widgets are created.
+    """
+    st.session_state["_pending_clear_exact_keys"] = exact_keys or []
+    st.session_state["_pending_clear_prefixes"] = prefixes or []
+    st.session_state["_pending_success_message"] = success_message
+    st.cache_data.clear()
+    st.rerun()
+
+
+def apply_pending_page_reset() -> None:
+    """Apply any requested widget-state reset before screen widgets are created."""
+    exact_keys = st.session_state.pop("_pending_clear_exact_keys", [])
+    prefixes = st.session_state.pop("_pending_clear_prefixes", [])
+    success_message = st.session_state.pop("_pending_success_message", None)
+
+    for key in exact_keys:
+        st.session_state.pop(key, None)
+
+    for key in list(st.session_state.keys()):
+        if any(str(key).startswith(prefix) for prefix in prefixes):
+            st.session_state.pop(key, None)
+
+    if success_message:
+        st.success(success_message)
+
+apply_pending_page_reset()
 
 # -------------------- Nav --------------------
 NAV_ITEMS = ["📝 Add Session", "➕ Add Tea", "✏️ Edit tea", "📜 Steep history"]
@@ -419,10 +411,20 @@ if st.session_state.active_tab == "📝 Add Session":
                 if selected_tea_pk is not None and "to_buy" in teas_df.columns:
                     SUPABASE.table("teas").update({"to_buy": add_session_to_buy}).eq("tea_id" if "tea_id" in teas_df.columns else "id", selected_tea_pk).execute()  # type: ignore
                 SUPABASE.table("steeps").insert(row).execute()  # type: ignore
-                st.success("✅ Saved. Form cleared so you can see it was submitted.")
-                clear_keys(ADD_SESSION_CLEAR_KEYS)
-                st.cache_data.clear()
-                st.rerun()
+                request_page_reset(
+                    "Saved. Form cleared so you can see it was submitted.",
+                    exact_keys=[
+                        "add_sess_tea",
+                        "add_sess_tnotes",
+                        "add_sess_rating",
+                        "add_sess_initial_secs",
+                        "add_sess_changes",
+                        "add_sess_temp",
+                        "add_sess_amount",
+                        "add_sess_snotes",
+                        f"add_sess_to_buy_{selected_tea_pk or 'none'}",
+                    ],
+                )
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
@@ -524,10 +526,10 @@ elif st.session_state.active_tab == "➕ Add Tea":
             tea_row = build_tea_payload(tea_row, allowed)
             try:
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
-                st.success("✅ Saved. Form cleared so you can see it was submitted.")
-                clear_keys(ADD_TEA_CLEAR_KEYS)
-                st.cache_data.clear()
-                st.rerun()
+                request_page_reset(
+                    "Tea saved. Form cleared so you can see it was submitted.",
+                    prefixes=["add_tea_"],
+                )
             except Exception as e:
                 st.error(f"Failed to save: {e}")
 
@@ -645,9 +647,10 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                         payload = build_tea_payload(payload, allowed)
                         try:
                             SUPABASE.table("teas").update(payload).eq(tea_pk, tea_pk_val).execute()  # type: ignore
-                            st.success("Tea updated.")
-                            st.cache_data.clear()
-                            st.rerun()
+                            request_page_reset(
+                                "Tea updated. Edit form reset.",
+                                prefixes=["edit_tea_"],
+                            )
                         except Exception as e:
                             st.error(f"Failed to update: {e}")
 
@@ -782,6 +785,7 @@ elif st.session_state.active_tab == "📜 Steep history":
                                 for e in errors:
                                     st.error(e)
                             else:
-                                st.success(f"Saved {len(payloads)} change(s).")
-                                st.cache_data.clear()
-                                st.rerun()
+                                request_page_reset(
+                                    f"Saved {len(payloads)} change(s). Steep history refreshed.",
+                                    exact_keys=["steep_editor", "hist_select_tea"],
+                                )

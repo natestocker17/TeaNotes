@@ -259,6 +259,48 @@ def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str
     return payloads
 
 
+# -------------------- Form state helpers --------------------
+def clear_keys(keys: List[str]) -> None:
+    """Clear Streamlit widget values after a successful save."""
+    for key in keys:
+        if key in st.session_state:
+            st.session_state[key] = ""
+
+
+ADD_SESSION_CLEAR_KEYS = [
+    "add_sess_tnotes",
+    "add_sess_rating",
+    "add_sess_initial_secs",
+    "add_sess_changes",
+    "add_sess_temp",
+    "add_sess_amount",
+    "add_sess_snotes",
+]
+
+
+ADD_TEA_CLEAR_KEYS = [
+    "add_tea_name",
+    "add_tea_url",
+    "add_tea_processing_notes",
+    "add_tea_pick_year",
+    "add_tea_picking_season",
+    "add_tea_price1",
+    "add_tea_weight1",
+    "add_tea_price2",
+    "add_tea_weight2",
+    "add_tea_wps",
+    "add_tea_subtype_new",
+    "add_tea_supplier_new",
+    "add_tea_cultivar_new",
+    "add_tea_country_new",
+    "add_tea_province_new",
+    "add_tea_prefecture_new",
+    "add_tea_county_new",
+    "add_tea_mountain_new",
+    "add_tea_village_new",
+]
+
+
 # -------------------- Supabase + data --------------------
 SUPABASE = get_supabase()
 _db = load_data()
@@ -377,9 +419,9 @@ if st.session_state.active_tab == "📝 Add Session":
                 if selected_tea_pk is not None and "to_buy" in teas_df.columns:
                     SUPABASE.table("teas").update({"to_buy": add_session_to_buy}).eq("tea_id" if "tea_id" in teas_df.columns else "id", selected_tea_pk).execute()  # type: ignore
                 SUPABASE.table("steeps").insert(row).execute()  # type: ignore
-                st.success("Saved.")
+                st.success("✅ Saved. Form cleared so you can see it was submitted.")
+                clear_keys(ADD_SESSION_CLEAR_KEYS)
                 st.cache_data.clear()
-                st.rerun()
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to save: {e}")
@@ -482,7 +524,8 @@ elif st.session_state.active_tab == "➕ Add Tea":
             tea_row = build_tea_payload(tea_row, allowed)
             try:
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
-                st.success("Saved.")
+                st.success("✅ Saved. Form cleared so you can see it was submitted.")
+                clear_keys(ADD_TEA_CLEAR_KEYS)
                 st.cache_data.clear()
                 st.rerun()
             except Exception as e:
@@ -741,5 +784,4 @@ elif st.session_state.active_tab == "📜 Steep history":
                             else:
                                 st.success(f"Saved {len(payloads)} change(s).")
                                 st.cache_data.clear()
-                                st.rerun()
                                 st.rerun()

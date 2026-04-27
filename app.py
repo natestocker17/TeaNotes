@@ -344,23 +344,28 @@ st.session_state.active_tab = st.radio(
 
 # -------------------- Screens --------------------
 if st.session_state.active_tab == "📝 Add Session":
-    
+
     tea_names = (
-    teas_df.get("name", pd.Series(dtype=str))
-    .dropna()
-    .astype(str)
-    .str.strip()
-)
+        teas_df.get("name", pd.Series(dtype=str))
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
     tea_names = tea_names[tea_names != ""].unique().tolist()
     tea_choices = ["(select)"] + sorted(tea_names, key=lambda x: x.lower())
 
+    # Keep tea selection outside the form so changing tea immediately refreshes
+    # the default To buy value before the user submits the session.
     tea_selected = st.selectbox("Tea", tea_choices, index=0, key="add_sess_tea")
+
     tea_selected_row = None
     if tea_selected != "(select)" and "name" in teas_df.columns:
         tea_selected_row = teas_df[teas_df["name"] == tea_selected].head(1)
+
     tea_id = None
     selected_tea_pk = None
     current_to_buy = "No"
+
     if tea_selected_row is not None and not tea_selected_row.empty:
         selected_tea_pk = tea_selected_row.iloc[0].get("tea_id") or tea_selected_row.iloc[0].get("id")
         tea_id = selected_tea_pk
@@ -371,24 +376,30 @@ if st.session_state.active_tab == "📝 Add Session":
             raw_str = str(raw_to_buy).strip().title()
             current_to_buy = raw_str if raw_str in TO_BUY_OPTIONS else "No"
 
-    tasting_notes = st.text_area("Tasting notes", value="", key="add_sess_tnotes")
-    overall_rating_txt = st.text_input("Overall rating (0–5)", value="", key="add_sess_rating")
-    add_session_to_buy = st.selectbox(
-        "To buy",
-        options=TO_BUY_OPTIONS,
-        index=safe_index(TO_BUY_OPTIONS, current_to_buy, default=1),
-        key=f"add_sess_to_buy_{selected_tea_pk or 'none'}",
-        disabled=(tea_selected == "(select)")
-    )
+    with st.form("add_session_form", clear_on_submit=True):
+        tasting_notes = st.text_area("Tasting notes", value="", key="add_sess_tnotes")
+        overall_rating_txt = st.text_input("Overall rating (0–5)", value="", key="add_sess_rating")
+        add_session_to_buy = st.selectbox(
+            "To buy",
+            options=TO_BUY_OPTIONS,
+            index=safe_index(TO_BUY_OPTIONS, current_to_buy, default=1),
+            key=f"add_sess_to_buy_{selected_tea_pk or 'none'}",
+            disabled=(tea_selected == "(select)")
+        )
 
-    with st.expander("More session details", expanded=False):
-        initial_secs_txt = st.text_input("Initial steep time (seconds)", value="", key="add_sess_initial_secs")
-        changes_text = st.text_input("Steep time changes", value="", key="add_sess_changes")
-        temperature_c_txt = st.text_input("Water temperature (°C)", value="", key="add_sess_temp")
-        amount_used_g_txt = st.text_input("Tea amount used (g)", value="", key="add_sess_amount")
-        steep_notes = st.text_area("Steep notes", value="", key="add_sess_snotes")
+        with st.expander("More session details", expanded=False):
+            initial_secs_txt = st.text_input("Initial steep time (seconds)", value="", key="add_sess_initial_secs")
+            changes_text = st.text_input("Steep time changes", value="", key="add_sess_changes")
+            temperature_c_txt = st.text_input("Water temperature (°C)", value="", key="add_sess_temp")
+            amount_used_g_txt = st.text_input("Tea amount used (g)", value="", key="add_sess_amount")
+            steep_notes = st.text_area("Steep notes", value="", key="add_sess_snotes")
 
-    save_session_btn = st.button("Save Session", type="primary", use_container_width=True, key="add_sess_save")
+        save_session_btn = st.form_submit_button(
+            "Save Session",
+            type="primary",
+            use_container_width=True,
+        )
+
     if save_session_btn:
         if tea_id is None:
             st.error("Please select a tea first.")

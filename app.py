@@ -297,7 +297,7 @@ div[data-testid="stRadio"] label[data-checked="true"] {
 st.title("🍵 Tea Notes — Sessions & Scores")
 
 TEA_TYPES = ["Oolong", "Black", "White", "Green", "Pu-erh", "Dark", "Yellow"]
-TO_BUY_OPTIONS = ["Yes", "No", "Maybe", "Wishlist"]
+TO_BUY_OPTIONS = ["Yes", "No", "Maybe", "Later", "Wishlist"]
 
 
 def request_page_reset(success_message: str, *, exact_keys: Optional[List[str]] = None, prefixes: Optional[List[str]] = None) -> None:
@@ -423,7 +423,7 @@ if st.session_state.active_tab == "📝 Add Session":
                     SUPABASE.table("teas").update({"to_buy": add_session_to_buy}).eq("tea_id" if "tea_id" in teas_df.columns else "id", selected_tea_pk).execute()  # type: ignore
                 SUPABASE.table("steeps").insert(row).execute()  # type: ignore
                 request_page_reset(
-                    "Saved. Form cleared so you can see it was submitted.",
+                    "Saved!",
                     exact_keys=[
                         "add_sess_tea",
                         "add_sess_tnotes",
@@ -525,7 +525,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "processing_notes": processing_notes_val,
                 "picking_season": picking_season_val,
                 "have_already": bool(have_already_cb),
-                "to_buy": to_buy_sel,  # "No", "Maybe", "Yes"
+                "to_buy": to_buy_sel,  # "No", "Maybe", "Yes", "Later", "Wishlist"
                 "price_1_nzd": safe_float(price_1),
                 "weight_1_g": safe_float(weight_1),
                 "price_2_nzd": safe_float(price_2),
@@ -538,7 +538,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
             try:
                 SUPABASE.table("teas").insert(tea_row).execute()  # type: ignore
                 request_page_reset(
-                    "Tea saved. Form cleared so you can see it was submitted.",
+                    "Tea saved!",
                     prefixes=["add_tea_"],
                 )
             except Exception as e:
@@ -647,7 +647,7 @@ elif st.session_state.active_tab == "✏️ Edit tea":
                             "processing_notes": (processing_notes_new.strip() or None) if isinstance(processing_notes_new, str) else None,
                             "picking_season": (picking_season_new.strip() or None) if isinstance(picking_season_new, str) else None,
                             "have_already": bool(have_already_new),
-                            "to_buy": to_buy_new,  # "No", "Maybe", "Yes"
+                            "to_buy": to_buy_new,  # "No", "Maybe", "Yes", "Later", "Wishlist"
                             "price_1_nzd": safe_float(price_1_new),
                             "weight_1_g": safe_float(weight_1_new),
                             "price_2_nzd": safe_float(price_2_new),

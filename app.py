@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Optional
 
 import numpy as np
@@ -7,6 +8,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from streamlit import column_config  # noqa: F401
+
+NZ_TZ = ZoneInfo("Pacific/Auckland")
 
 # -------------------- Supabase availability --------------------
 try:
@@ -46,10 +49,12 @@ def load_data() -> Dict[str, pd.DataFrame]:
 
 
 def ensure_datetime(col: pd.Series) -> pd.Series:
+    """Parse datetimes and display them in New Zealand local time."""
     try:
-        return pd.to_datetime(col, errors="coerce")
+        dt = pd.to_datetime(col, errors="coerce", utc=True)
+        return dt.dt.tz_convert(NZ_TZ)
     except Exception:
-        return pd.to_datetime(pd.Series([None] * len(col)))
+        return pd.to_datetime(pd.Series([None] * len(col)), utc=True).dt.tz_convert(NZ_TZ)
 
 
 def options_from_column(df: pd.DataFrame, col: str) -> List[str]:
@@ -206,12 +211,24 @@ FLOAT_COLS_STEEP = ["rating", "amount_used_g"]
 
 
 def _to_iso_utc_or_none(value):
+    """Convert a user-entered/display datetime to UTC ISO for storage.
+
+    Naive values are interpreted as Pacific/Auckland local time. Timezone-aware
+    values are converted to UTC.
+    """
     if value is None or (isinstance(value, str) and value.strip() == "") or (isinstance(value, float) and np.isnan(value)):
         return None
-    ts = pd.to_datetime(value, errors="coerce", utc=True)
+
+    ts = pd.to_datetime(value, errors="coerce")
     if pd.isna(ts):
         return None
-    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if getattr(ts, "tzinfo", None) is None:
+        ts = ts.tz_localize(NZ_TZ)
+    else:
+        ts = ts.tz_convert(NZ_TZ)
+
+    return ts.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def build_steep_payloads(changed_df: pd.DataFrame, pk_col: str) -> List[Dict[str, Any]]:
@@ -356,7 +373,7 @@ if st.session_state.active_tab == "📝 Add Session":
         tea_options_df = tea_options_df[tea_options_df["_name_clean"] != ""]
         tea_choices = ["(select)"] + sorted(
             tea_options_df["_name_clean"].unique().tolist(),
-            key=lambda x: x.lower()
+            key=lambda x: x.lower(),
         )
     else:
         tea_options_df = pd.DataFrame()
@@ -368,9 +385,6 @@ if st.session_state.active_tab == "📝 Add Session":
 
     tea_selected_row = None
     if tea_selected != "(select)" and not tea_options_df.empty:
-        # tea_choices are stripped display names, so match against the stripped
-        # version too. Otherwise names with leading/trailing spaces appear
-        # selected but do not resolve to a tea_id.
         tea_selected_row = tea_options_df[tea_options_df["_name_clean"] == tea_selected].head(1)
 
     tea_id = None
@@ -429,7 +443,7 @@ if st.session_state.active_tab == "📝 Add Session":
                 "steep_time_changes": (changes_text or None),
                 "temperature_c": safe_int(temperature_c_txt),
                 "amount_used_g": safe_float(amount_used_g_txt),
-                "session_at": datetime.utcnow().isoformat(),
+                "session_at": datetime.now(NZ_TZ).isoformat(),
             }
             try:
                 if selected_tea_pk is not None and "to_buy" in teas_df.columns:
@@ -544,7 +558,7 @@ elif st.session_state.active_tab == "➕ Add Tea":
                 "price_2_nzd": safe_float(price_2),
                 "weight_2_g": safe_float(weight_2),
                 "weight_per_session_g": safe_float(weight_per_session),
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(NZ_TZ).isoformat(),
             }
             allowed = set(teas_df.columns)
             tea_row = build_tea_payload(tea_row, allowed)

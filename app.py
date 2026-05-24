@@ -345,29 +345,42 @@ st.session_state.active_tab = st.radio(
 # -------------------- Screens --------------------
 if st.session_state.active_tab == "📝 Add Session":
 
-    tea_names = (
-        teas_df.get("name", pd.Series(dtype=str))
-        .dropna()
-        .astype(str)
-        .str.strip()
-    )
-    tea_names = tea_names[tea_names != ""].unique().tolist()
-    tea_choices = ["(select)"] + sorted(tea_names, key=lambda x: x.lower())
+    if "name" in teas_df.columns:
+        tea_options_df = teas_df.copy()
+        tea_options_df["_name_clean"] = (
+            tea_options_df["name"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+        tea_options_df = tea_options_df[tea_options_df["_name_clean"] != ""]
+        tea_choices = ["(select)"] + sorted(
+            tea_options_df["_name_clean"].unique().tolist(),
+            key=lambda x: x.lower()
+        )
+    else:
+        tea_options_df = pd.DataFrame()
+        tea_choices = ["(select)"]
 
     # Keep tea selection outside the form so changing tea immediately refreshes
     # the default To buy value before the user submits the session.
     tea_selected = st.selectbox("Tea", tea_choices, index=0, key="add_sess_tea")
 
     tea_selected_row = None
-    if tea_selected != "(select)" and "name" in teas_df.columns:
-        tea_selected_row = teas_df[teas_df["name"] == tea_selected].head(1)
+    if tea_selected != "(select)" and not tea_options_df.empty:
+        # tea_choices are stripped display names, so match against the stripped
+        # version too. Otherwise names with leading/trailing spaces appear
+        # selected but do not resolve to a tea_id.
+        tea_selected_row = tea_options_df[tea_options_df["_name_clean"] == tea_selected].head(1)
 
     tea_id = None
     selected_tea_pk = None
     current_to_buy = "No"
 
     if tea_selected_row is not None and not tea_selected_row.empty:
-        selected_tea_pk = tea_selected_row.iloc[0].get("tea_id") or tea_selected_row.iloc[0].get("id")
+        selected_tea_pk = tea_selected_row.iloc[0].get("tea_id")
+        if pd.isna(selected_tea_pk):
+            selected_tea_pk = tea_selected_row.iloc[0].get("id")
         tea_id = selected_tea_pk
         raw_to_buy = tea_selected_row.iloc[0].get("to_buy", "No")
         if isinstance(raw_to_buy, bool):
